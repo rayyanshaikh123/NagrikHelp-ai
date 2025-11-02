@@ -24,8 +24,6 @@ API:
 
 import io
 import os
-
-login(token=os.getenv("HUGGINGFACE_HUB_TOKEN"))
 from typing import List
 import logging
 
@@ -69,16 +67,54 @@ def load_model():
         logger.exception("Failed to import transformers: %s", e)
         raise
 
+    # If the user has provided a Hugging Face token (for private/gated repos), use it
+    hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
+
+    def _try_from_pretrained(name: str):
+        # Centralize call so we can pass token when present.
+        kwargs = {}
+        if hf_token:
+            kwargs["use_auth_token"] = hf_token
+        logger.info("Attempting to load model '%s' (use_auth_token=%s)", name, bool(hf_token))
+        proc = AutoImageProcessor.from_pretrained(name, **kwargs)
+        mod = AutoModelForImageClassification.from_pretrained(name, **kwargs)
+        return proc, mod
+
+    # First attempt: try the provided MODEL_NAME directly.
     try:
         logger.info("Loading model %s ...", MODEL_NAME)
-        processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
-        model = AutoModelForImageClassification.from_pretrained(MODEL_NAME)
+        processor, model = _try_from_pretrained(MODEL_NAME)
         model.eval()
         logger.info("Model %s loaded successfully", MODEL_NAME)
-    except Exception as e:
-        # Provide a clearer error message for runtime issues (torch/numpy)
-        logger.exception("Failed to load model %s: %s", MODEL_NAME, e)
-        raise RuntimeError(f"Failed to load model {MODEL_NAME}: {e}") from e
+        return
+    except Exception as e_first:
+        logger.debug("Initial load of model %s failed: %s", MODEL_NAME, e_first)
+
+    # If the repo id looks like a common typo (owner-name instead of owner/name),
+    # try a simple auto-fix: replace the first '-' with '/'. This will turn
+    # microsoft-resnet-50 -> microsoft/resnet-50 which is a common mistake.
+    alt_name = None
+    if "/" not in MODEL_NAME and "-" in MODEL_NAME:
+        alt_name = MODEL_NAME.replace("-", "/", 1)
+        try:
+            logger.warning("Model id '%s' not found; trying alternative id '%s'", MODEL_NAME, alt_name)
+            processor, model = _try_from_pretrained(alt_name)
+            model.eval()
+            logger.info("Model %s loaded successfully (as %s)", MODEL_NAME, alt_name)
+            return
+        except Exception as e_alt:
+            logger.debug("Alternative load %s also failed: %s", alt_name, e_alt)
+
+    # If we get here, both attempts failed. Provide clearer guidance in the raised error.
+    guidance = (
+        "Model identifier not found or access denied. "
+        "If this is a private model, set HUGGINGFACE_HUB_TOKEN in the environment (Render secret) "
+        "or log in with `huggingface-cli login`. Also verify MODEL_NAME uses owner/repo format, "
+        "for example 'microsoft/resnet-50'."
+    )
+    logger.exception("Failed to load model %s. %s", MODEL_NAME, guidance)
+    # Raise a RuntimeError with combined info to make logs and HTTP 503 responses helpful.
+    raise RuntimeError(f"Failed to load model {MODEL_NAME}: {e_first}. {guidance}") from e_first
 
 
 @app.get("/")
