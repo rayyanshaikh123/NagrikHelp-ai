@@ -37,11 +37,78 @@ SUPPORTED_MODELS = [
     "facebook/convnext-base-224",
 ]
 
+# Keywords / phrases that indicate an image likely contains a civic issue.
+# This is a heuristic list — expand as needed for your use-case or replace with
+# a domain-specific model trained to detect civic issues (potholes, flooding,
+# graffiti, illegal dumping, broken streetlights, etc.). Matching is case-
+# insensitive and checks for substring presence in label names returned by the
+# classifier.
+CIVIC_KEYWORDS = [
+    "pothole",
+    "potholes",
+    "graffiti",
+    "garbage",
+    "trash",
+    "litter",
+    "dump",
+    "dumping",
+    "illegal",
+    "flood",
+    "flooding",
+    "standing water",
+    "sewage",
+    "overflow",
+    "blocked",
+    "blocked drain",
+    "sinkhole",
+    "road",
+    "street",
+    "traffic light",
+    "streetlight",
+    "lamp post",
+    "sign",
+    "broken",
+    "damaged",
+    "collapsed",
+    "debris",
+    "fallen",
+    "fire",
+    "smoke",
+    "accident",
+    "vandalism",
+    "construction",
+    "hole",
+    "crack",
+    "leak",
+    "spill",
+]
+
+
+def is_civic_issue(labels: list) -> bool:
+    """Return True if any of the given label strings contains a civic keyword.
+
+    This is intentionally permissive (substring match) to work with labels
+    returned by generic image classifiers. For production use, consider a
+    specialized binary classifier trained to detect civic issues.
+    """
+    if not labels:
+        return False
+    lowered = [l.lower() for l in labels if isinstance(l, str)]
+    for kw in CIVIC_KEYWORDS:
+        for lab in lowered:
+            if kw in lab:
+                return True
+    return False
+
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
 from PIL import Image
 MODEL_NAME = os.getenv("MODEL_NAME", os.getenv("LOCAL_VISION_MODEL", os.getenv("CIVIC_VISION_MODEL", "google/vit-base-patch16-224")))
 TOP_K = int(os.getenv("TOP_K", "5"))
+USE_TEXT_MODEL = os.getenv("USE_TEXT_MODEL", "0") in ("1", "true", "True")
+# Model to use for text-based zero-shot checking (optional). This model needs
+# transformers + a backend (PyTorch/TF/Flax) available in the environment.
+TEXT_MODEL_NAME = os.getenv("TEXT_MODEL_NAME", "facebook/bart-large-mnli")
 
 app = FastAPI()
 
@@ -176,7 +243,61 @@ async def classify(request: Request):
         for score, idx in zip(topk_scores.tolist(), topk_indices.tolist()):
             label = id2label.get(int(idx), str(idx))
             results.append({"label": label, "score": float(score)})
-        return JSONResponse(results)
+        # Check for civic-issue signals in the predicted labels. If none of the
+        # top labels looks like a civic issue, reject the image to avoid
+        # processing irrelevant/non-civic content.
+        top_labels = [r["label"] for r in results]
+        # Compute a civic-confidence value. Prefer a text-based zero-shot model
+        # (controlled by USE_TEXT_MODEL). If unavailable, fall back to the max
+        # label probability produced by the image model.
+        civic_confidence_pct = None
+
+        def _fallback_confidence(results_list: List[dict]) -> float:
+            # Use the highest softmax probability as a conservative proxy.
+            if not results_list:
+                return 0.0
+            return max(r.get("score", 0.0) for r in results_list) * 100.0
+
+        if USE_TEXT_MODEL:
+            try:
+                # Lazy import so environments without transformers/torch don't fail.
+                from transformers import pipeline
+
+                seq = "; ".join(top_labels) or ""
+                clf = pipeline(
+                    "zero-shot-classification",
+                    model=TEXT_MODEL_NAME,
+                )
+                # Candidate labels: civic vs not civic
+                candidate_labels = ["civic_issue", "not_civic_issue"]
+                z = clf(seq, candidate_labels)
+                # z['labels'] lists labels in order and 'scores' correspond.
+                # Find the score for 'civic_issue' if present.
+                if "civic_issue" in z.get("labels", []):
+                    idx = z["labels"].index("civic_issue")
+                    civic_confidence_pct = float(z.get("scores", [0.0])[idx]) * 100.0
+                else:
+                    civic_confidence_pct = float(z.get("scores", [0.0])[0]) * 100.0
+            except Exception:
+                # If any error occurs (missing backends, network, etc.), fall back.
+                civic_confidence_pct = _fallback_confidence(results)
+        else:
+            civic_confidence_pct = _fallback_confidence(results)
+        if not is_civic_issue(top_labels):
+            # Return the top labels so clients can understand why the image
+            # was rejected and improve UX (for example, prompt for a better
+            # photo or allow manual override).
+            logger.info("Image rejected: no civic keywords found in top labels: %s", top_labels)
+            raise HTTPException(status_code=422, detail={
+                "error": "No civic issue detected",
+                "top_labels": top_labels,
+                "civic_confidence_pct": civic_confidence_pct,
+                "suggestion": "Take a photo that clearly shows a civic issue (pothole, flooding, graffiti, illegal dumping, damaged streetlight, etc.)"
+            })
+
+    # Attach civic confidence to the response for client-side UX.
+        resp = {"predictions": results, "civic_confidence_pct": civic_confidence_pct}
+        return JSONResponse(resp)
     except HTTPException:
         raise
     except Exception as e:
@@ -192,6 +313,16 @@ def model_status():
     """
     loaded = (model is not None and processor is not None)
     return {"loaded": loaded, "model": MODEL_NAME if loaded else None}
+
+
+@app.get("/civic-keywords")
+def civic_keywords():
+    """Return the list of civic keywords used to filter accepted images.
+
+    Clients can call this endpoint to show guidance or a help UI explaining
+    what types of photos the service accepts.
+    """
+    return {"keywords": CIVIC_KEYWORDS}
 
 if __name__ == "__main__":
     import uvicorn
