@@ -74,6 +74,9 @@ def load_model():
         # Centralize call so we can pass token when present.
         kwargs = {}
         if hf_token:
+            # `token` is the newer argument; `use_auth_token` is deprecated in
+            # recent transformers versions but some older versions still accept it.
+            kwargs["token"] = hf_token
             kwargs["use_auth_token"] = hf_token
         logger.info("Attempting to load model '%s' (use_auth_token=%s)", name, bool(hf_token))
         proc = AutoImageProcessor.from_pretrained(name, **kwargs)
@@ -81,13 +84,16 @@ def load_model():
         return proc, mod
 
     # First attempt: try the provided MODEL_NAME directly.
+    e_first = None
+    e_alt = None
     try:
         logger.info("Loading model %s ...", MODEL_NAME)
         processor, model = _try_from_pretrained(MODEL_NAME)
         model.eval()
         logger.info("Model %s loaded successfully", MODEL_NAME)
         return
-    except Exception as e_first:
+    except Exception as exc1:
+        e_first = exc1
         logger.debug("Initial load of model %s failed: %s", MODEL_NAME, e_first)
 
     # If the repo id looks like a common typo (owner-name instead of owner/name),
@@ -102,7 +108,8 @@ def load_model():
             model.eval()
             logger.info("Model %s loaded successfully (as %s)", MODEL_NAME, alt_name)
             return
-        except Exception as e_alt:
+        except Exception as exc2:
+            e_alt = exc2
             logger.debug("Alternative load %s also failed: %s", alt_name, e_alt)
 
     # If we get here, both attempts failed. Provide clearer guidance in the raised error.
@@ -113,8 +120,21 @@ def load_model():
         "for example 'microsoft/resnet-50'."
     )
     logger.exception("Failed to load model %s. %s", MODEL_NAME, guidance)
+    # Build a compact diagnostics string from captured exceptions.
+    details = []
+    if e_first is not None:
+        details.append(f"initial error: {e_first}")
+    if e_alt is not None:
+        details.append(f"alternative error: {e_alt}")
+    detail_msg = " | ".join(details) if details else "no exception captured"
+
     # Raise a RuntimeError with combined info to make logs and HTTP 503 responses helpful.
-    raise RuntimeError(f"Failed to load model {MODEL_NAME}: {e_first}. {guidance}") from e_first
+    # Attach the original exception as the __cause__ when available.
+    cause = e_first or e_alt
+    if cause is not None:
+        raise RuntimeError(f"Failed to load model {MODEL_NAME}: {detail_msg}. {guidance}") from cause
+    else:
+        raise RuntimeError(f"Failed to load model {MODEL_NAME}: {detail_msg}. {guidance}")
 
 
 @app.get("/")
