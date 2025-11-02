@@ -67,8 +67,8 @@ git push origin main
 2. In the Render dashboard create a new Web Service and connect your repository. When Render reads the repo it will detect `render.yaml` and configure the service accordingly.
 
 3. Review the service settings that Render displays. Confirm:
-   - The build command is: `pip install -r local_vision_requirements.txt`
    - The start command is: `uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT`
+   - The `render.yaml` build command now prints diagnostics (python/pip/uname) and installs PyTorch from the PyTorch wheel index before installing the rest of the requirements. If you see wheel resolution errors in the build logs, check the printed Python version and platform details and compare against available PyTorch wheels at https://download.pytorch.org/whl/.
 
 4. Environment variables
    - `render.yaml` already contains `MODEL_NAME` and `TOP_K`. You can override them in the Render dashboard under Environment > Environment Variables.
@@ -85,3 +85,7 @@ Notes & troubleshooting
 If you want, I can:
 - Add an example Render secret mapping to `render.yaml` (placeholder keys only) so you have a template.
 - Add a `Makefile` with `make dev`, `make install-full`, and `make start` targets to simplify local workflows.
+
+Debugging tips if deploy still fails
+- Open the Render deploy logs and look for the "=== Build diagnostics ===" block near the top of the build; it prints `python --version` and platform info. If the Python version displayed doesn't match one that PyTorch provides wheels for, set the Render service to use Python 3.11 or 3.12 in the Render dashboard.
+- If you see errors about `tokenizers` building from source, that's usually a sign a prebuilt wheel wasn't found for your Python/platform. Use Python 3.11/3.12 or ensure the PyTorch wheel index is consulted (it's enabled in `render.yaml`).

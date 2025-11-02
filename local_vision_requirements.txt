@@ -7,9 +7,10 @@ uvicorn
 fastapi
 Pillow
 transformers
-# Pin CPU PyTorch wheels so Render can install prebuilt binaries from the
-# official PyTorch wheel index. If you need CUDA, replace these with the
-# appropriate CUDA wheel spec from https://pytorch.org/get-started/locally/.
-torch==2.2.0+cpu
-torchvision==0.18.1+cpu
-torchaudio==2.3.2+cpu
+# Install stable PyTorch packages. The Render build uses an extra PyTorch
+# wheel index to prefer prebuilt binaries when available; during local
+# development on macOS you may need to follow https://pytorch.org/get-started/locally/
+# to install a platform-appropriate wheel.
+torch==2.2.0
+torchvision==0.18.1
+torchaudio==2.3.2
