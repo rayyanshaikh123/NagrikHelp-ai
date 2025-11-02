@@ -24,6 +24,8 @@ API:
 
 import io
 import os
+
+login(token=os.getenv("HUGGINGFACE_HUB_TOKEN"))
 from typing import List
 import logging
 
