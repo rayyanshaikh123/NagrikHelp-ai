@@ -16,11 +16,16 @@ services:
       echo "=== Upgrading pip & build tools ==="
       python -m pip install --upgrade pip setuptools wheel
 
-      echo "=== Installing PyTorch (try PyTorch index first) ==="
-      # Try to install torch from the PyTorch index (manylinux wheels). If
-      # the exact pinned version isn't available, allow pip to pick a
-      # compatible binary.
-      pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu "torch" "torchvision" "torchaudio" || true
+  echo "=== Installing NumPy (ensure numpy present before torch) ==="
+  # Install numpy first so torch's import can correctly initialize the
+  # NumPy C-API. Use --prefer-binary to prefer wheels.
+  pip install --prefer-binary numpy || true
+
+  echo "=== Installing PyTorch (try PyTorch index first) ==="
+  # Try to install torch from the PyTorch index (manylinux wheels). If
+  # the exact pinned version isn't available, allow pip to pick a
+  # compatible binary.
+  pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu "torch" "torchvision" "torchaudio" || true
 
       echo "=== Installing remaining requirements (prefer binary wheels) ==="
       pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r local_vision_requirements.txt

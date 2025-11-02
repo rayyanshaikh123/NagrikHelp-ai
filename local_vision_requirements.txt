@@ -9,6 +9,9 @@ datasets==2.21.0
 # and pinning mismatched versions caused Docker/Render resolution errors.
 # The Render build will consult the PyTorch wheel index to fetch compatible
 # manylinux wheels when available.
+# Ensure NumPy is installed before torch so torch can initialize NumPy's
+# C-API properly during import on the host environment.
+numpy>=1.25.0
 torch==2.2.0
 
 # Optional extras (install locally if you need them):
