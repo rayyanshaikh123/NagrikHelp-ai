@@ -12,9 +12,11 @@ services:
   # --extra-index-url so pip falls back to PyPI for other packages while
   # checking the PyTorch index for the torch wheel.
   pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu "torch==2.2.0+cpu" || true
-      # Now install remaining requirements preferring binary wheels to avoid
-      # building native extensions from source when possible.
-      pip install --prefer-binary -r local_vision_requirements.txt
+  # Now install remaining requirements preferring binary wheels to avoid
+  # building native extensions from source when possible. Include the
+  # PyTorch wheel index as an extra index so `torch==2.2.0+cpu` in
+  # requirements will be resolved.
+  pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r local_vision_requirements.txt
     startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: MODEL_NAME

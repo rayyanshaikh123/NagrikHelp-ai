@@ -7,7 +7,9 @@ uvicorn
 fastapi
 Pillow
 transformers
-# NOTE: `torch` is installed in `render.yaml` buildCommand from the
-# PyTorch wheel index (using --extra-index-url). Leaving `torch` out of the
-# requirements file avoids pip attempting to resolve a `+cpu` local-version
-# suffix on PyPI which can cause "No matching distribution" errors.
+# Pin CPU PyTorch wheels so Render can install prebuilt binaries from the
+# official PyTorch wheel index. If you need CUDA, replace these with the
+# appropriate CUDA wheel spec from https://pytorch.org/get-started/locally/.
+torch==2.2.0+cpu
+torchvision==0.18.1+cpu
+torchaudio==2.3.2+cpu
