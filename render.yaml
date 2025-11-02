@@ -12,21 +12,16 @@ services:
       python --version || true
       pip --version || true
       uname -a || true
-      lscpu || true
       echo "=== Upgrading pip & build tools ==="
       python -m pip install --upgrade pip setuptools wheel
 
-  echo "=== Installing NumPy (ensure numpy present before torch) ==="
-  # Install a NumPy 1.x series so torch and native extensions compiled
-  # against NumPy 1.x will work. We explicitly install numpy<2 here to
-  # avoid NumPy 2.x incompatibilities.
-  pip install --prefer-binary "numpy<2" || true
+      echo "=== Installing NumPy (ensure numpy<2 present before torch) ==="
+      pip install --prefer-binary "numpy<2" || true
 
-  echo "=== Installing PyTorch (try PyTorch index first) ==="
-  # Try to install torch from the PyTorch index (manylinux wheels). If
-  # the exact pinned version isn't available, allow pip to pick a
-  # compatible binary.
-  pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu "torch" "torchvision" "torchaudio" || true
+      echo "=== Installing PyTorch from PyTorch wheel index ==="
+      # Install torch (no fixed +cpu suffix) from PyTorch index so a
+      # compatible manylinux wheel is selected for the build environment.
+      pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu "torch" || true
 
       echo "=== Installing remaining requirements (prefer binary wheels) ==="
       pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r local_vision_requirements.txt
@@ -35,7 +30,7 @@ services:
     startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: MODEL_NAME
-        value: "microsoft-resnet-500"
+        value: "google/vit-base-patch16-224"
       - key: TOP_K
         value: "5"
       # Render provides $PORT at runtime; LOCAL_VISION_HOST is left as default in code

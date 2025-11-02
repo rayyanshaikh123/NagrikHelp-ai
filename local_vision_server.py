@@ -19,6 +19,10 @@ API:
 import io
 import os
 from typing import List
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
@@ -44,11 +48,22 @@ def load_model():
     if model is not None and processor is not None:
         return
     # Import inside the function to avoid module-level side-effects during import
-    from transformers import AutoImageProcessor, AutoModelForImageClassification
+    try:
+        from transformers import AutoImageProcessor, AutoModelForImageClassification
+    except Exception as e:
+        logger.exception("Failed to import transformers: %s", e)
+        raise
 
-    processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
-    model = AutoModelForImageClassification.from_pretrained(MODEL_NAME)
-    model.eval()
+    try:
+        logger.info("Loading model %s ...", MODEL_NAME)
+        processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
+        model = AutoModelForImageClassification.from_pretrained(MODEL_NAME)
+        model.eval()
+        logger.info("Model %s loaded successfully", MODEL_NAME)
+    except Exception as e:
+        # Provide a clearer error message for runtime issues (torch/numpy)
+        logger.exception("Failed to load model %s: %s", MODEL_NAME, e)
+        raise RuntimeError(f"Failed to load model {MODEL_NAME}: {e}") from e
 
 
 @app.get("/")
@@ -64,11 +79,20 @@ async def classify(request: Request):
         if not body:
             raise HTTPException(status_code=400, detail="Empty body")
         # Ensure the model is loaded on first use
-        load_model()
+        try:
+            load_model()
+        except Exception as e:
+            # Surface a 503 so orchestration can retry if startup/load fails
+            logger.exception("Model load error: %s", e)
+            raise HTTPException(status_code=503, detail=str(e))
 
         # Import torch lazily so the module can be imported in CI or in a
         # lightweight environment without having to install torch/tokenizers.
-        import torch
+        try:
+            import torch
+        except Exception as e:
+            logger.exception("Torch import failed: %s", e)
+            raise HTTPException(status_code=503, detail=f"Torch not available: {e}")
 
         img = Image.open(io.BytesIO(body)).convert("RGB")
         inputs = processor(images=img, return_tensors="pt")
@@ -83,8 +107,21 @@ async def classify(request: Request):
             label = id2label.get(int(idx), str(idx))
             results.append({"label": label, "score": float(score)})
         return JSONResponse(results)
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.exception("Unhandled error in classify: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/model-status")
+def model_status():
+    """Return whether the model is loaded and basic info.
+
+    Useful for health checks after deployment.
+    """
+    loaded = (model is not None and processor is not None)
+    return {"loaded": loaded, "model": MODEL_NAME if loaded else None}
 
 if __name__ == "__main__":
     import uvicorn
