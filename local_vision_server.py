@@ -26,6 +26,10 @@ import io
 import os
 from typing import List
 import logging
+import re
+import json
+import urllib.request
+import urllib.error
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -106,9 +110,14 @@ from PIL import Image
 MODEL_NAME = os.getenv("MODEL_NAME", os.getenv("LOCAL_VISION_MODEL", os.getenv("CIVIC_VISION_MODEL", "google/vit-base-patch16-224")))
 TOP_K = int(os.getenv("TOP_K", "5"))
 USE_TEXT_MODEL = os.getenv("USE_TEXT_MODEL", "0") in ("1", "true", "True")
-# Model to use for text-based zero-shot checking (optional). This model needs
-# transformers + a backend (PyTorch/TF/Flax) available in the environment.
+# Text model provider: 'hf' for Hugging Face zero-shot (default), or 'gemini'
+# to use Google Gemini/Vertex AI (requires external credentials and config).
+TEXT_MODEL_PROVIDER = os.getenv("TEXT_MODEL_PROVIDER", "hf")
+# Model to use for text-based zero-shot checking when provider is 'hf'. This
+# model needs transformers + a backend (PyTorch/TF/Flax) available in the env.
 TEXT_MODEL_NAME = os.getenv("TEXT_MODEL_NAME", "facebook/bart-large-mnli")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-1.5-mini")
 
 app = FastAPI()
 
@@ -261,16 +270,92 @@ async def classify(request: Request):
         if USE_TEXT_MODEL:
             try:
                 # Lazy import so environments without transformers/torch don't fail.
-                from transformers import pipeline
+                if TEXT_MODEL_PROVIDER == "hf":
+                    from transformers import pipeline
 
-                seq = "; ".join(top_labels) or ""
-                clf = pipeline(
-                    "zero-shot-classification",
-                    model=TEXT_MODEL_NAME,
-                )
-                # Candidate labels: civic vs not civic
-                candidate_labels = ["civic_issue", "not_civic_issue"]
-                z = clf(seq, candidate_labels)
+                    seq = "; ".join(top_labels) or ""
+                    clf = pipeline(
+                        "zero-shot-classification",
+                        model=TEXT_MODEL_NAME,
+                    )
+                    # Candidate labels: civic vs not civic
+                    candidate_labels = ["civic_issue", "not_civic_issue"]
+                    z = clf(seq, candidate_labels)
+                elif TEXT_MODEL_PROVIDER == "gemini":
+                    # Call Gemini (Generative Language API) via REST using an
+                    # API key. The caller must set GEMINI_API_KEY and optionally
+                    # GEMINI_MODEL (defaults to models/gemini-1.5-mini).
+                    if not GEMINI_API_KEY:
+                        raise RuntimeError("TEXT_MODEL_PROVIDER=gemini selected but GEMINI_API_KEY is not set in the environment.")
+
+                    def _call_gemini_for_confidence(text: str) -> float:
+                        """Call the Generative Language `generate` endpoint and
+                        parse a percentage confidence that the `text` indicates a
+                        civic issue. Returns a float 0.0-100.0.
+                        """
+                        endpoint = f"https://generativelanguage.googleapis.com/v1beta2/{GEMINI_MODEL}:generate?key={GEMINI_API_KEY}"
+                        # Prompt the model to return a strict JSON with a
+                        # numeric 'civic_confidence' field to simplify parsing.
+                        prompt_text = (
+                            "You are a classifier. Given the following labels: '" + text + "' \n"
+                            "Respond ONLY with a JSON object containing a single key 'civic_confidence' whose value is a number between 0 and 100 representing the percent likelihood that the labels indicate a civic/municipal issue (pothole, flooding, graffiti, illegal dumping, broken streetlight, etc.).\n"
+                        )
+                        body = {
+                            "prompt": {"text": prompt_text},
+                            "temperature": 0.0,
+                            "max_output_tokens": 256,
+                        }
+                        data = json.dumps(body).encode("utf-8")
+                        req = urllib.request.Request(endpoint, data=data, headers={"Content-Type": "application/json"})
+                        try:
+                            with urllib.request.urlopen(req, timeout=15) as resp:
+                                resp_text = resp.read().decode("utf-8")
+                        except urllib.error.HTTPError as he:
+                            logger.exception("Gemini HTTP error: %s", he)
+                            raise
+                        except Exception as ex:
+                            logger.exception("Gemini request failed: %s", ex)
+                            raise
+
+                        # The response is JSON; try extracting candidate text.
+                        try:
+                            parsed = json.loads(resp_text)
+                            # Expect 'candidates' or 'outputs' holding text.
+                            cand_text = None
+                            if isinstance(parsed, dict):
+                                # new API surface: 'candidates' or 'output'
+                                if "candidates" in parsed and parsed["candidates"]:
+                                    cand_text = parsed["candidates"][0].get("content", "")
+                                elif "output" in parsed and parsed["output"]:
+                                    # fallback naming
+                                    cand = parsed["output"][0]
+                                    cand_text = cand.get("content", "") if isinstance(cand, dict) else str(cand)
+                                elif "candidates" in parsed and isinstance(parsed.get("candidates"), list):
+                                    cand_text = str(parsed.get("candidates"))
+                                else:
+                                    # Some responses put text under 'candidates'[0]['output']
+                                    cand_text = json.dumps(parsed)
+                            else:
+                                cand_text = str(parsed)
+                        except Exception:
+                            # If parsing as JSON fails, treat entire response as text
+                            cand_text = resp_text
+
+                        # Find a number in the candidate text (0-100). If none,
+                        # fallback to 0.
+                        m = re.search(r"(\d{1,3}(?:\.\d+)?)", cand_text)
+                        if m:
+                            try:
+                                val = float(m.group(1))
+                                # clamp
+                                val = max(0.0, min(100.0, val))
+                                return val
+                            except Exception:
+                                return 0.0
+                        # final fallback
+                        return 0.0
+
+                    civic_confidence_pct = _call_gemini_for_confidence(seq)
                 # z['labels'] lists labels in order and 'scores' correspond.
                 # Find the score for 'civic_issue' if present.
                 if "civic_issue" in z.get("labels", []):
