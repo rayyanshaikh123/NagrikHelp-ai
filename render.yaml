@@ -17,9 +17,10 @@ services:
       python -m pip install --upgrade pip setuptools wheel
 
   echo "=== Installing NumPy (ensure numpy present before torch) ==="
-  # Install numpy first so torch's import can correctly initialize the
-  # NumPy C-API. Use --prefer-binary to prefer wheels.
-  pip install --prefer-binary numpy || true
+  # Install a NumPy 1.x series so torch and native extensions compiled
+  # against NumPy 1.x will work. We explicitly install numpy<2 here to
+  # avoid NumPy 2.x incompatibilities.
+  pip install --prefer-binary "numpy<2" || true
 
   echo "=== Installing PyTorch (try PyTorch index first) ==="
   # Try to install torch from the PyTorch index (manylinux wheels). If
