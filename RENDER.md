@@ -46,8 +46,10 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r local_vision_requirements.txt
-# Install CPU torch wheel (adjust if you need CUDA)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# The repo pins the CPU PyTorch wheel (torch==2.2.0+cpu) and the build steps
+# prefer binary wheels to avoid building tokenizers from source. If you need
+# a GPU/CUDA build, replace the torch line with the appropriate CUDA wheel
+# or follow instructions at https://pytorch.org/get-started/locally/.
 ```
 
 When you call `POST /classify` the model weights will be downloaded on first use (unless you pre-cache them).

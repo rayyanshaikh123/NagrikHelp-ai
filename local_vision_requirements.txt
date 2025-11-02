@@ -7,4 +7,6 @@ uvicorn
 fastapi
 Pillow
 transformers
-torch>=2.2.0
+# Pin a CPU torch wheel; Render buildCommand will install this wheel from the
+# official PyTorch index which speeds builds and avoids source compilation.
+torch==2.2.0+cpu --index-url https://download.pytorch.org/whl/cpu
