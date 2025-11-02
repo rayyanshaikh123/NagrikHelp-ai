@@ -119,6 +119,68 @@ TEXT_MODEL_NAME = os.getenv("TEXT_MODEL_NAME", "facebook/bart-large-mnli")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-1.5-mini")
 
+
+def call_gemini_confidence(labels: List[str], required_labels: List[str]) -> float:
+    """Call Gemini with the provided labels and required civic labels.
+
+    The function builds a prompt asking Gemini to return a JSON object with
+    a single numeric field `civic_confidence` (0-100). Returns the parsed
+    numeric value, or 0.0 on failure.
+    """
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not set")
+
+    labels_text = "; ".join(labels)
+    required_text = ", ".join(required_labels[:20])  # keep prompt short
+    prompt_text = (
+        "You are a classifier. Given the following detected image labels: '" + labels_text + "'.\n"
+        "Also consider these civic-related labels (for reference): '" + required_text + "'.\n"
+        "Return ONLY a JSON object with a single numeric field 'civic_confidence' whose value is a number between 0 and 100 representing the percent likelihood that the detected labels indicate a civic/municipal issue (pothole, flooding, graffiti, illegal dumping, broken streetlight, etc.).\n"
+    )
+
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta2/{GEMINI_MODEL}:generate?key={GEMINI_API_KEY}"
+    body = {"prompt": {"text": prompt_text}, "temperature": 0.0, "max_output_tokens": 256}
+    try:
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(endpoint, data=data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp_text = resp.read().decode("utf-8")
+    except Exception as ex:
+        logger.exception("Gemini request failed: %s", ex)
+        return 0.0
+
+    # Try to parse JSON from the response; fall back to regex
+    try:
+        parsed = json.loads(resp_text)
+        # Try common shapes
+        # 'candidates' -> list with 'content' or text
+        cand_text = None
+        if isinstance(parsed, dict):
+            if "candidates" in parsed and parsed["candidates"]:
+                cand = parsed["candidates"][0]
+                if isinstance(cand, dict):
+                    cand_text = cand.get("content") or cand.get("output") or json.dumps(cand)
+                else:
+                    cand_text = str(cand)
+            elif "output" in parsed and parsed["output"]:
+                cand = parsed["output"][0]
+                cand_text = cand.get("content") if isinstance(cand, dict) else str(cand)
+            else:
+                cand_text = json.dumps(parsed)
+        else:
+            cand_text = str(parsed)
+    except Exception:
+        cand_text = resp_text
+
+    m = re.search(r"(\d{1,3}(?:\.\d+)?)", cand_text)
+    if m:
+        try:
+            val = float(m.group(1))
+            return max(0.0, min(100.0, val))
+        except Exception:
+            return 0.0
+    return 0.0
+
 app = FastAPI()
 
 # Lazy-loaded model/processor. This avoids heavy model downloads at import time so CI
@@ -355,7 +417,9 @@ async def classify(request: Request):
                         # final fallback
                         return 0.0
 
-                    civic_confidence_pct = _call_gemini_for_confidence(seq)
+                    # Use structured Gemini helper passing both detected labels
+                    # and the canonical civic keyword list so Gemini can compare.
+                    civic_confidence_pct = call_gemini_confidence(top_labels, CIVIC_KEYWORDS)
                 # z['labels'] lists labels in order and 'scores' correspond.
                 # Find the score for 'civic_issue' if present.
                 if "civic_issue" in z.get("labels", []):
