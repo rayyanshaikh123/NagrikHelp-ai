@@ -74,10 +74,9 @@ def load_model():
         # Centralize call so we can pass token when present.
         kwargs = {}
         if hf_token:
-            # `token` is the newer argument; `use_auth_token` is deprecated in
-            # recent transformers versions but some older versions still accept it.
+            # Use the modern `token` kwarg. Do NOT pass `use_auth_token` as some
+            # transformer versions will raise if both are provided.
             kwargs["token"] = hf_token
-            kwargs["use_auth_token"] = hf_token
         logger.info("Attempting to load model '%s' (use_auth_token=%s)", name, bool(hf_token))
         proc = AutoImageProcessor.from_pretrained(name, **kwargs)
         mod = AutoModelForImageClassification.from_pretrained(name, **kwargs)
