@@ -118,6 +118,9 @@ TEXT_MODEL_PROVIDER = os.getenv("TEXT_MODEL_PROVIDER", "hf")
 TEXT_MODEL_NAME = os.getenv("TEXT_MODEL_NAME", "facebook/bart-large-mnli")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-1.5-mini")
+# Threshold (percent) above which we accept Gemini / text-model confidence as
+# indicating a civic issue. Can be tuned via environment.
+CIVIC_CONFIDENCE_THRESHOLD = float(os.getenv("CIVIC_CONFIDENCE_THRESHOLD", "30"))
 
 
 def call_gemini_confidence(labels: List[str], required_labels: List[str]) -> float:
@@ -432,15 +435,24 @@ async def classify(request: Request):
                 civic_confidence_pct = _fallback_confidence(results)
         else:
             civic_confidence_pct = _fallback_confidence(results)
-        if not is_civic_issue(top_labels):
-            # Return the top labels so clients can understand why the image
-            # was rejected and improve UX (for example, prompt for a better
-            # photo or allow manual override).
-            logger.info("Image rejected: no civic keywords found in top labels: %s", top_labels)
+        # Decide acceptance using the text-model confidence when enabled;
+        # otherwise fall back to the heuristic substring matcher.
+        accepted = False
+        if USE_TEXT_MODEL:
+            try:
+                accepted = (civic_confidence_pct is not None and civic_confidence_pct >= CIVIC_CONFIDENCE_THRESHOLD)
+            except Exception:
+                accepted = False
+        else:
+            accepted = is_civic_issue(top_labels)
+
+        if not accepted:
+            logger.info("Image rejected: civic_confidence_pct=%%s, top_labels=%s", civic_confidence_pct, top_labels)
             raise HTTPException(status_code=422, detail={
                 "error": "No civic issue detected",
                 "top_labels": top_labels,
                 "civic_confidence_pct": civic_confidence_pct,
+                "threshold": CIVIC_CONFIDENCE_THRESHOLD,
                 "suggestion": "Take a photo that clearly shows a civic issue (pothole, flooding, graffiti, illegal dumping, damaged streetlight, etc.)"
             })
 
