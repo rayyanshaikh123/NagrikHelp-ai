@@ -147,7 +147,9 @@ def call_gemini_confidence(labels: List[str], required_labels: List[str]) -> flo
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(endpoint, data=data, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=15) as resp:
-            resp_text = resp.read().decode("utf-8")
+                resp_text = resp.read().decode("utf-8")
+                # Log the raw Gemini response for debugging / inspection
+                logger.info("Gemini raw response: %s", resp_text)
     except Exception as ex:
         logger.exception("Gemini request failed: %s", ex)
         return 0.0
@@ -375,6 +377,8 @@ async def classify(request: Request):
                         try:
                             with urllib.request.urlopen(req, timeout=15) as resp:
                                 resp_text = resp.read().decode("utf-8")
+                                # Log the raw Gemini response for debugging / inspection
+                                logger.info("Gemini raw response: %s", resp_text)
                         except urllib.error.HTTPError as he:
                             logger.exception("Gemini HTTP error: %s", he)
                             raise
