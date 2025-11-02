@@ -3,14 +3,13 @@ uvicorn[standard]==0.30.6
 transformers==4.44.2
 Pillow==10.4.0
 datasets==2.21.0
-uvicorn
-fastapi
-Pillow
-transformers
-# Install stable PyTorch packages. The Render build uses an extra PyTorch
-# wheel index to prefer prebuilt binaries when available; during local
-# development on macOS you may need to follow https://pytorch.org/get-started/locally/
-# to install a platform-appropriate wheel.
+
+# Core ML backend: pin torch to a stable release. We avoid pinning
+# torchvision/torchaudio here because they're not required by the server
+# and pinning mismatched versions caused Docker/Render resolution errors.
+# The Render build will consult the PyTorch wheel index to fetch compatible
+# manylinux wheels when available.
 torch==2.2.0
-torchvision==0.18.1
-torchaudio==2.3.2
+
+# Optional extras (install locally if you need them):
+# pip install torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
