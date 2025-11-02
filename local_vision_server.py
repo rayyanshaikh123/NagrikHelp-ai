@@ -24,17 +24,32 @@ from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
 from PIL import Image
 import torch
-from transformers import AutoImageProcessor, AutoModelForImageClassification
-
-
 MODEL_NAME = os.getenv("MODEL_NAME", os.getenv("LOCAL_VISION_MODEL", os.getenv("CIVIC_VISION_MODEL", "google/vit-base-patch16-224")))
 TOP_K = int(os.getenv("TOP_K", "5"))
 
 app = FastAPI()
 
-processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
-model = AutoModelForImageClassification.from_pretrained(MODEL_NAME)
-model.eval()
+# Lazy-loaded model/processor. This avoids heavy model downloads at import time so CI
+# and quick smoke tests can import the app without pulling large HF weights.
+processor = None
+model = None
+
+
+def load_model():
+    """Load the HF image processor and model into module globals if not already loaded.
+
+    This function imports the transformers classes locally so importing this module
+    doesn't trigger large downloads.
+    """
+    global processor, model
+    if model is not None and processor is not None:
+        return
+    # Import inside the function to avoid module-level side-effects during import
+    from transformers import AutoImageProcessor, AutoModelForImageClassification
+
+    processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
+    model = AutoModelForImageClassification.from_pretrained(MODEL_NAME)
+    model.eval()
 
 
 @app.get("/")
@@ -49,6 +64,8 @@ async def classify(request: Request):
         body = await request.body()
         if not body:
             raise HTTPException(status_code=400, detail="Empty body")
+        # Ensure the model is loaded on first use
+        load_model()
 
         img = Image.open(io.BytesIO(body)).convert("RGB")
         inputs = processor(images=img, return_tensors="pt")

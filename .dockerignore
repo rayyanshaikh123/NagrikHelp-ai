@@ -1,0 +1,26 @@
+.venv
+venv
+env
+ENV
+.python-version
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+.pytest_cache/
+.cache/
+.mypy_cache/
+node_modules/
+.git
+.gitignore
+*.log
+local_vision_server.pyc
+
+# Keep the requirements file so Docker can install dependencies
+!local_vision_requirements.txt

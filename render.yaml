@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: local-vision-server
+    env: python
+    plan: free
+    buildCommand: pip install -r local_vision_requirements.txt
+    startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
