@@ -8,9 +8,10 @@ services:
     # from source which is slow and often fails on newer Python/Rust setups.
     buildCommand: |
       python -m pip install --upgrade pip setuptools wheel
-      # Install CPU PyTorch wheel first (adjust if you need CUDA). This uses
-      # the PyTorch index which serves manylinux wheels for Linux hosts.
-      pip install --prefer-binary --index-url https://download.pytorch.org/whl/cpu "torch==2.2.0+cpu" || true
+  # Install CPU PyTorch wheel first (adjust if you need CUDA). Use
+  # --extra-index-url so pip falls back to PyPI for other packages while
+  # checking the PyTorch index for the torch wheel.
+  pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu "torch==2.2.0+cpu" || true
       # Now install remaining requirements preferring binary wheels to avoid
       # building native extensions from source when possible.
       pip install --prefer-binary -r local_vision_requirements.txt
