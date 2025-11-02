@@ -7,3 +7,4 @@ uvicorn
 fastapi
 Pillow
 transformers
+torch>=2.2.0

@@ -5,4 +5,10 @@ services:
     plan: free
     buildCommand: pip install -r local_vision_requirements.txt
     startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MODEL_NAME
+        value: "microsoft-resnet-500"
+      - key: TOP_K
+        value: "5"
+      # Render provides $PORT at runtime; LOCAL_VISION_HOST is left as default in code
     healthCheckPath: /
