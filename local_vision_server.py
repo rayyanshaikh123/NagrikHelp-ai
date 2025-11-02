@@ -2,18 +2,24 @@
 Local image classification server using Hugging Face Transformers (PyTorch).
 
 Usage:
-  1) Create & activate a virtual environment (recommended).
-  2) pip install -r scripts/local_vision_requirements.txt
-  3) python -m uvicorn scripts.local_vision_server:app --host 127.0.0.1 --port 8001
+    1) Create & activate a virtual environment (recommended).
+    2) pip install -r scripts/local_vision_requirements.txt
+    3) python -m uvicorn scripts.local_vision_server:app --host 127.0.0.1 --port 8001
 
 Env vars:
-  MODEL_NAME   (default: google/vit-base-patch16-224)
-  TOP_K        (default: 5)
+    MODEL_NAME   (default: google/vit-base-patch16-224)
+    TOP_K        (default: 5)
+
+Recommended public model names (examples):
+    - google/vit-base-patch16-224
+    - google/vit-large-patch16-224
+    - microsoft/resnet-50
+    - facebook/convnext-base-224
 
 API:
-  GET  /           -> { ok: true, model: str }
-  POST /classify   -> body: raw image bytes (image/jpeg|image/png)
-                      resp: [{ label: str, score: float }]
+    GET  /           -> { ok: True, model: str }
+    POST /classify   -> body: raw image bytes (image/jpeg|image/png)
+                                            resp: [{ label: str, score: float }]
 """
 
 import io
@@ -23,6 +29,13 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+# Example public models for quick reference inside the module
+SUPPORTED_MODELS = [
+    "google/vit-base-patch16-224",
+    "google/vit-large-patch16-224",
+    "microsoft/resnet-50",
+    "facebook/convnext-base-224",
+]
 
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse

@@ -29,6 +29,11 @@ services:
       echo "=== Build finished ==="
     startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
     envVars:
+      # Recommended public image classification model names you can use:
+      # - google/vit-base-patch16-224
+      # - google/vit-large-patch16-224
+      # - microsoft/resnet-50
+      # - facebook/convnext-base-224
       # Default public model used for first deploy. You can override this in
       # the Render dashboard (Environment > Environment Variables) to change
       # model or to point to a private model (see HUGGINGFACE_HUB_TOKEN note).
