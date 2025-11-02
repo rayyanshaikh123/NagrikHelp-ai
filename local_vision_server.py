@@ -23,7 +23,6 @@ from typing import List
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
 from PIL import Image
-import torch
 MODEL_NAME = os.getenv("MODEL_NAME", os.getenv("LOCAL_VISION_MODEL", os.getenv("CIVIC_VISION_MODEL", "google/vit-base-patch16-224")))
 TOP_K = int(os.getenv("TOP_K", "5"))
 
@@ -66,6 +65,10 @@ async def classify(request: Request):
             raise HTTPException(status_code=400, detail="Empty body")
         # Ensure the model is loaded on first use
         load_model()
+
+        # Import torch lazily so the module can be imported in CI or in a
+        # lightweight environment without having to install torch/tokenizers.
+        import torch
 
         img = Image.open(io.BytesIO(body)).convert("RGB")
         inputs = processor(images=img, return_tensors="pt")
