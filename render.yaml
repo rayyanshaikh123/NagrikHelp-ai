@@ -29,9 +29,17 @@ services:
       echo "=== Build finished ==="
     startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
     envVars:
+      # Default public model used for first deploy. You can override this in
+      # the Render dashboard (Environment > Environment Variables) to change
+      # model or to point to a private model (see HUGGINGFACE_HUB_TOKEN note).
       - key: MODEL_NAME
         value: "google/vit-base-patch16-224"
       - key: TOP_K
         value: "5"
+      # If you need to access private or gated Hugging Face repositories,
+      # create a secret in Render named HUGGINGFACE_HUB_TOKEN and add it
+      # as an environment variable here (do NOT commit the token to git).
+      - key: HUGGINGFACE_HUB_TOKEN
+        value: ""
       # Render provides $PORT at runtime; LOCAL_VISION_HOST is left as default in code
     healthCheckPath: /
