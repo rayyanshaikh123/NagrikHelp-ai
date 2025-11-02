@@ -27,10 +27,11 @@ RUN apt-get update \
 
 # -----------------------------
 # Install Python dependencies
-# -----------------------------
 COPY local_vision_requirements.txt ./
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r local_vision_requirements.txt
+    && pip install --no-cache-dir -r local_vision_requirements.txt \
+    && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 
 # -----------------------------
 # Optional: install CPU-only PyTorch
