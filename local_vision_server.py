@@ -1,384 +1,182 @@
-#!/usr/bin/env python3
 """
-Local image classification server using Hugging Face Transformers (PyTorch)
-with optional Gemini/text-model based civic confidence scoring.
+Local image classification server using Hugging Face Transformers (PyTorch).
 
-Endpoints:
-  GET  /                -> { ok: True, model: str }
-  GET  /model-status    -> {"loaded": bool, "model": str|None}
-  GET  /gemini-status   -> {"reachable": bool, "last_error": str|null}
-  POST /classify        -> send image bytes (raw body) OR multipart form 'file'
-                           returns predictions + civic_confidence_pct + top_label
+Usage:
+    1) Create & activate a virtual environment (recommended).
+    2) pip install -r scripts/local_vision_requirements.txt
+    3) python -m uvicorn scripts.local_vision_server:app --host 127.0.0.1 --port 8001
+
+Env vars:
+    MODEL_NAME   (default: google/vit-base-patch16-224)
+    TOP_K        (default: 5)
+
+Recommended public model names (examples):
+    - google/vit-base-patch16-224
+    - google/vit-large-patch16-224
+    - microsoft/resnet-50
+    - facebook/convnext-base-224
+
+API:
+    GET  /           -> { ok: True, model: str }
+    POST /classify   -> body: raw image bytes (image/jpeg|image/png)
+                                            resp: [{ label: str, score: float }]
 """
 
 import io
 import os
-import json
+from typing import List
 import logging
-import re
-from typing import List, Optional, Tuple
-
-import urllib.request
-import urllib.error
-
-from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from PIL import Image
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("local_vision_server")
-
-# -------- Configuration (via env vars) --------
-MODEL_NAME = os.getenv("MODEL_NAME", "google/vit-base-patch16-224")
-TOP_K = int(os.getenv("TOP_K", "5"))
-USE_TEXT_MODEL = os.getenv("USE_TEXT_MODEL", "0").lower() in ("1", "true", "yes")
-TEXT_MODEL_PROVIDER = os.getenv("TEXT_MODEL_PROVIDER", "hf")  # 'hf' or 'gemini'
-TEXT_MODEL_NAME = os.getenv("TEXT_MODEL_NAME", "facebook/bart-large-mnli")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-1.5-mini")
-CIVIC_CONFIDENCE_THRESHOLD = float(os.getenv("CIVIC_CONFIDENCE_THRESHOLD", "30"))
-HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
-
-# Example labels/keywords for civic issue detection
-CIVIC_KEYWORDS = [
-    "pothole", "potholes", "graffiti", "garbage", "trash", "litter", "dump", "dumping",
-    "illegal", "flood", "flooding", "standing water", "sewage", "overflow",
-    "blocked", "blocked drain", "sinkhole", "road", "street", "traffic light",
-    "streetlight", "lamp post", "sign", "broken", "damaged", "collapsed",
-    "debris", "fallen", "fire", "smoke", "accident", "vandalism", "construction",
-    "hole", "crack", "leak", "spill",
+logger = logging.getLogger(__name__)
+# Example public models for quick reference inside the module
+SUPPORTED_MODELS = [
+    "google/vit-base-patch16-224",
+    "google/vit-large-patch16-224",
+    "microsoft/resnet-50",
+    "facebook/convnext-base-224",
 ]
 
-app = FastAPI(title="Local Vision Server (Civic Detector)")
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import JSONResponse
+from PIL import Image
+MODEL_NAME = os.getenv("MODEL_NAME", os.getenv("LOCAL_VISION_MODEL", os.getenv("CIVIC_VISION_MODEL", "google/vit-base-patch16-224")))
+TOP_K = int(os.getenv("TOP_K", "5"))
 
-# Lazy-loaded
+app = FastAPI()
+
+# Lazy-loaded model/processor. This avoids heavy model downloads at import time so CI
+# and quick smoke tests can import the app without pulling large HF weights.
 processor = None
 model = None
 
-# For tracking last Gemini health error
-_gemini_last_error: Optional[str] = None
-
-
-# ------------------- Model loading -------------------
-def _try_from_pretrained(name: str, token: Optional[str] = None):
-    """Central place to call from_pretrained with optional token."""
-    from transformers import AutoImageProcessor, AutoModelForImageClassification
-
-    kwargs = {}
-    if token:
-        kwargs["token"] = token
-    logger.info("Calling AutoImageProcessor.from_pretrained(%s)", name)
-    proc = AutoImageProcessor.from_pretrained(name, **kwargs)
-    logger.info("Calling AutoModelForImageClassification.from_pretrained(%s)", name)
-    mod = AutoModelForImageClassification.from_pretrained(name, **kwargs)
-    return proc, mod
-
 
 def load_model():
-    """Load model and processor into globals. Raises on failure with helpful message."""
+    """Load the HF image processor and model into module globals if not already loaded.
+
+    This function imports the transformers classes locally so importing this module
+    doesn't trigger large downloads.
+    """
     global processor, model
-    if processor is not None and model is not None:
+    if model is not None and processor is not None:
         return
-
+    # Import inside the function to avoid module-level side-effects during import
     try:
-        from transformers import AutoImageProcessor, AutoModelForImageClassification  # noqa: F401
+        from transformers import AutoImageProcessor, AutoModelForImageClassification
     except Exception as e:
-        logger.exception("transformers import failed: %s", e)
-        raise RuntimeError(f"transformers import failed: {e}")
+        logger.exception("Failed to import transformers: %s", e)
+        raise
 
-    # Attempt load; try given name, then attempt auto-fix replacement '-' -> '/'
-    first_exc = None
+    # If the user has provided a Hugging Face token (for private/gated repos), use it
+    hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
+
+    def _try_from_pretrained(name: str):
+        # Centralize call so we can pass token when present.
+        kwargs = {}
+        if hf_token:
+            # Use the modern `token` kwarg. Do NOT pass `use_auth_token` as some
+            # transformer versions will raise if both are provided.
+            kwargs["token"] = hf_token
+        logger.info("Attempting to load model '%s' (use_auth_token=%s)", name, bool(hf_token))
+        proc = AutoImageProcessor.from_pretrained(name, **kwargs)
+        mod = AutoModelForImageClassification.from_pretrained(name, **kwargs)
+        return proc, mod
+
+    # First attempt: try the provided MODEL_NAME directly.
+    e_first = None
+    e_alt = None
     try:
         logger.info("Loading model %s ...", MODEL_NAME)
-        processor, model = _try_from_pretrained(MODEL_NAME, token=HF_TOKEN)
+        processor, model = _try_from_pretrained(MODEL_NAME)
         model.eval()
         logger.info("Model %s loaded successfully", MODEL_NAME)
         return
-    except Exception as e:
-        first_exc = e
-        logger.debug("Initial load failed: %s", e)
+    except Exception as exc1:
+        e_first = exc1
+        logger.debug("Initial load of model %s failed: %s", MODEL_NAME, e_first)
 
-    # try auto-fix if looks like owner-name instead of owner/name
+    # If the repo id looks like a common typo (owner-name instead of owner/name),
+    # try a simple auto-fix: replace the first '-' with '/'. This will turn
+    # microsoft-resnet-50 -> microsoft/resnet-50 which is a common mistake.
     alt_name = None
     if "/" not in MODEL_NAME and "-" in MODEL_NAME:
         alt_name = MODEL_NAME.replace("-", "/", 1)
         try:
-            logger.info("Trying alternative model id: %s", alt_name)
-            processor, model = _try_from_pretrained(alt_name, token=HF_TOKEN)
+            logger.warning("Model id '%s' not found; trying alternative id '%s'", MODEL_NAME, alt_name)
+            processor, model = _try_from_pretrained(alt_name)
             model.eval()
-            logger.info("Model loaded successfully as %s", alt_name)
+            logger.info("Model %s loaded successfully (as %s)", MODEL_NAME, alt_name)
             return
-        except Exception as e:
-            logger.debug("Alt load failed: %s", e)
+        except Exception as exc2:
+            e_alt = exc2
+            logger.debug("Alternative load %s also failed: %s", alt_name, e_alt)
 
-    # Build diagnostics
+    # If we get here, both attempts failed. Provide clearer guidance in the raised error.
     guidance = (
-        "Model identifier not found or access denied. If this is a private model, set HUGGINGFACE_HUB_TOKEN "
-        "in the environment. Also verify MODEL_NAME uses owner/repo format (e.g., 'microsoft/resnet-50')."
+        "Model identifier not found or access denied. "
+        "If this is a private model, set HUGGINGFACE_HUB_TOKEN in the environment (Render secret) "
+        "or log in with `huggingface-cli login`. Also verify MODEL_NAME uses owner/repo format, "
+        "for example 'microsoft/resnet-50'."
     )
-    detail_msg = f"initial_error: {first_exc!r}"
-    logger.exception("Failed to load model %s: %s. %s", MODEL_NAME, detail_msg, guidance)
-    # Raise an informative RuntimeError
-    raise RuntimeError(f"Failed to load model {MODEL_NAME}: {detail_msg}. {guidance}")
+    logger.exception("Failed to load model %s. %s", MODEL_NAME, guidance)
+    # Build a compact diagnostics string from captured exceptions.
+    details = []
+    if e_first is not None:
+        details.append(f"initial error: {e_first}")
+    if e_alt is not None:
+        details.append(f"alternative error: {e_alt}")
+    detail_msg = " | ".join(details) if details else "no exception captured"
 
-
-# ------------------- Helpers -------------------
-def is_civic_issue(labels: List[str]) -> bool:
-    if not labels:
-        return False
-    lowered = [l.lower() for l in labels if isinstance(l, str)]
-    for kw in CIVIC_KEYWORDS:
-        for lab in lowered:
-            if kw in lab:
-                return True
-    return False
-
-
-def _fallback_confidence(results_list: List[dict]) -> float:
-    if not results_list:
-        return 0.0
-    return max(r.get("score", 0.0) for r in results_list) * 100.0
-
-
-# ------------------- Gemini integration -------------------
-def call_gemini_confidence(labels: List[str], required_labels: List[str]) -> float:
-    """
-    Ask Gemini to return a numeric civic_confidence (0-100). Returns 0.0 on any failure.
-    This function uses the Generative Language REST endpoint and attempts to parse
-    common shapes of responses.
-    """
-    global _gemini_last_error
-    if not GEMINI_API_KEY:
-        _gemini_last_error = "GEMINI_API_KEY not set"
-        logger.debug(_gemini_last_error)
-        return 0.0
-
-    labels_text = "; ".join(labels) if labels else ""
-    required_text = ", ".join(required_labels[:30])
-
-    prompt_text = (
-        "You are a strict JSON-only classifier.\n"
-        "Given the following detected image labels: '" + labels_text + "'.\n"
-        "Also consider these civic-related labels for reference: '" + required_text + "'.\n"
-        "Return ONLY a JSON object with a single numeric field 'civic_confidence' whose value is a number between 0 and 100 representing the percent likelihood that the detected labels indicate a civic/municipal issue (pothole, flooding, graffiti, illegal dumping, broken streetlight, etc.).\n"
-        "Do NOT include any extra text."
-    )
-
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta2/{GEMINI_MODEL}:generate?key={GEMINI_API_KEY}"
-    body = {"prompt": {"text": prompt_text}, "temperature": 0.0, "max_output_tokens": 128}
-
-    try:
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(endpoint, data=data, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            resp_text = resp.read().decode("utf-8")
-            logger.info("Gemini raw response: %s", resp_text)
-    except urllib.error.HTTPError as he:
-        _gemini_last_error = f"HTTPError: {he}"
-        logger.exception("Gemini HTTP error: %s", he)
-        return 0.0
-    except Exception as ex:
-        _gemini_last_error = f"Request failed: {ex}"
-        logger.exception("Gemini request failed: %s", ex)
-        return 0.0
-
-    # Try parsing JSON first
-    try:
-        parsed = json.loads(resp_text)
-    except Exception:
-        parsed = None
-
-    cand_text = ""
-    if isinstance(parsed, dict):
-        # Try common shapes
-        if "candidates" in parsed and parsed["candidates"]:
-            first = parsed["candidates"][0]
-            if isinstance(first, dict):
-                cand_text = first.get("content") or first.get("output") or json.dumps(first)
-            else:
-                cand_text = str(first)
-        elif "output" in parsed and parsed["output"]:
-            first = parsed["output"][0]
-            if isinstance(first, dict):
-                cand_text = first.get("content") or json.dumps(first)
-            else:
-                cand_text = str(first)
-        elif "civic_confidence" in parsed:
-            cand_text = str(parsed["civic_confidence"])
-        else:
-            # fallback to entire JSON string
-            cand_text = json.dumps(parsed)
+    # Raise a RuntimeError with combined info to make logs and HTTP 503 responses helpful.
+    # Attach the original exception as the __cause__ when available.
+    cause = e_first or e_alt
+    if cause is not None:
+        raise RuntimeError(f"Failed to load model {MODEL_NAME}: {detail_msg}. {guidance}") from cause
     else:
-        cand_text = resp_text
-
-    # Extract first numeric (0-100)
-    m = re.search(r"(\d{1,3}(?:\.\d+)?)", cand_text)
-    if m:
-        try:
-            val = float(m.group(1))
-            val = max(0.0, min(100.0, val))
-            _gemini_last_error = None
-            return val
-        except Exception as ex:
-            _gemini_last_error = f"parse error: {ex}"
-            logger.exception("Gemini parse error: %s", ex)
-            return 0.0
-
-    _gemini_last_error = "no numeric found in response"
-    logger.warning("Gemini response did not contain a numeric confidence: %s", cand_text)
-    return 0.0
+        raise RuntimeError(f"Failed to load model {MODEL_NAME}: {detail_msg}. {guidance}")
 
 
-# ------------------- FastAPI endpoints -------------------
 @app.get("/")
 def root():
     return {"ok": True, "model": MODEL_NAME}
 
 
-@app.get("/model-status")
-def model_status():
-    loaded = model is not None and processor is not None
-    return {"loaded": loaded, "model": MODEL_NAME if loaded else None}
-
-
-@app.get("/gemini-status")
-def gemini_status():
-    reachable = _gemini_last_error is None if GEMINI_API_KEY else False
-    return {"reachable": reachable, "last_error": _gemini_last_error}
-
-
 @app.post("/classify")
-async def classify(request: Request, file: Optional[UploadFile] = File(None)):
-    """
-    Accepts raw image bytes as body OR multipart/form-data with file field named 'file'.
-    Returns JSON with predictions and civic_confidence_pct.
-    """
+async def classify(request: Request):
     try:
-        # 1) get image bytes
-        body_bytes = b""
-        try:
-            if file is not None:
-                body_bytes = await file.read()
-            else:
-                # try reading raw body
-                body_bytes = await request.body()
-                # if body appears to be form-data boundary (in some clients), attempt parse
-                if not body_bytes:
-                    raise HTTPException(status_code=400, detail="No image data provided")
-        except Exception as e:
-            logger.exception("Failed to read image bytes: %s", e)
-            raise HTTPException(status_code=400, detail=f"Failed to read image: {e}")
-
-        # 2) ensure model loaded
+        content_type = request.headers.get("content-type", "application/octet-stream")
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="Empty body")
+        # Ensure the model is loaded on first use
         try:
             load_model()
         except Exception as e:
+            # Surface a 503 so orchestration can retry if startup/load fails
             logger.exception("Model load error: %s", e)
             raise HTTPException(status_code=503, detail=str(e))
 
-        # 3) verify PyTorch present (model expects torch)
+        # Import torch lazily so the module can be imported in CI or in a
+        # lightweight environment without having to install torch/tokenizers.
         try:
-            import torch  # noqa: F401
+            import torch
         except Exception as e:
             logger.exception("Torch import failed: %s", e)
             raise HTTPException(status_code=503, detail=f"Torch not available: {e}")
 
-        # 4) open image and run processor/model
-        try:
-            img = Image.open(io.BytesIO(body_bytes)).convert("RGB")
-        except Exception as e:
-            logger.exception("Invalid image: %s", e)
-            raise HTTPException(status_code=400, detail=f"Invalid image data: {e}")
-
+        img = Image.open(io.BytesIO(body)).convert("RGB")
         inputs = processor(images=img, return_tensors="pt")
-        import torch
-
         with torch.no_grad():
-            outputs = model(**inputs)
-            # Some HF models return ModelOutput with logits/key; use .logits if present
-            logits = getattr(outputs, "logits", None)
-            if logits is None:
-                raise RuntimeError("Model output did not contain logits")
-
+            logits = model(**inputs).logits
         probs = torch.softmax(logits, dim=-1)[0]
-        topk = min(TOP_K, probs.shape[-1])
-        topk_scores, topk_indices = torch.topk(probs, k=topk)
+        topk_scores, topk_indices = torch.topk(probs, k=min(TOP_K, probs.shape[-1]))
 
-        id2label = getattr(model.config, "id2label", None) or {}
+        id2label = model.config.id2label
         results: List[dict] = []
         for score, idx in zip(topk_scores.tolist(), topk_indices.tolist()):
             label = id2label.get(int(idx), str(idx))
             results.append({"label": label, "score": float(score)})
-
-        top_labels = [r["label"] for r in results]
-
-        # 5) compute civic confidence
-        civic_confidence_pct: Optional[float] = None
-        if USE_TEXT_MODEL:
-            try:
-                if TEXT_MODEL_PROVIDER == "hf":
-                    # Use HF zero-shot pipeline
-                    try:
-                        from transformers import pipeline
-                    except Exception as e:
-                        logger.exception("HF text pipeline import failed: %s", e)
-                        raise
-
-                    seq = "; ".join(top_labels) or ""
-                    clf = pipeline("zero-shot-classification", model=TEXT_MODEL_NAME, device=-1)
-                    candidate_labels = ["civic_issue", "not_civic_issue"]
-                    z = clf(seq, candidate_labels)
-                    # z contains 'labels' and 'scores'
-                    if "labels" in z and "scores" in z:
-                        if "civic_issue" in z["labels"]:
-                            idx = z["labels"].index("civic_issue")
-                            civic_confidence_pct = float(z["scores"][idx]) * 100.0
-                        else:
-                            civic_confidence_pct = float(z["scores"][0]) * 100.0
-                    else:
-                        civic_confidence_pct = _fallback_confidence(results)
-                elif TEXT_MODEL_PROVIDER == "gemini":
-                    civic_confidence_pct = call_gemini_confidence(top_labels, CIVIC_KEYWORDS)
-                else:
-                    civic_confidence_pct = _fallback_confidence(results)
-            except Exception as e:
-                logger.exception("Text-model based confidence failed: %s", e)
-                civic_confidence_pct = _fallback_confidence(results)
-        else:
-            # Simple heuristics fallback
-            civic_confidence_pct = _fallback_confidence(results)
-
-        # 6) decide acceptance
-        accepted = False
-        try:
-            if USE_TEXT_MODEL:
-                accepted = civic_confidence_pct is not None and civic_confidence_pct >= CIVIC_CONFIDENCE_THRESHOLD
-            else:
-                accepted = is_civic_issue(top_labels)
-        except Exception:
-            accepted = False
-
-        if not accepted:
-            logger.info("Image rejected: civic_confidence_pct=%s, top_labels=%s", civic_confidence_pct, top_labels)
-            raise HTTPException(status_code=422, detail={
-                "error": "No civic issue detected",
-                "top_labels": top_labels,
-                "civic_confidence_pct": civic_confidence_pct,
-                "threshold": CIVIC_CONFIDENCE_THRESHOLD
-            })
-
-        # 7) build response (top label + message)
-        top_label = results[0]["label"] if results else "unknown"
-        resp = {
-            "top_label": top_label,
-            "top_label_score": results[0]["score"] if results else 0.0,
-            "civic_confidence_pct": civic_confidence_pct,
-            "predictions": results,
-            "message": f"Detected '{top_label}' with civic confidence {civic_confidence_pct:.2f}%"
-        }
-        return JSONResponse(resp)
-
+        return JSONResponse(results)
     except HTTPException:
         raise
     except Exception as e:
@@ -386,9 +184,18 @@ async def classify(request: Request, file: Optional[UploadFile] = File(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Run with `python local_vision_server.py` for local dev
+@app.get("/model-status")
+def model_status():
+    """Return whether the model is loaded and basic info.
+
+    Useful for health checks after deployment.
+    """
+    loaded = (model is not None and processor is not None)
+    return {"loaded": loaded, "model": MODEL_NAME if loaded else None}
+
 if __name__ == "__main__":
     import uvicorn
-    host = os.getenv("LOCAL_VISION_HOST", "0.0.0.0")
+    host = os.getenv("LOCAL_VISION_HOST", "127.0.0.1")
     port = int(os.getenv("LOCAL_VISION_PORT", "8001"))
-    uvicorn.run("local_vision_server:app", host=host, port=port, log_level="info")
+    # Run directly without module string to avoid import path issues
+    uvicorn.run(app, host=host, port=port)
