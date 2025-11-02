@@ -447,7 +447,7 @@ async def classify(request: Request):
             accepted = is_civic_issue(top_labels)
 
         if not accepted:
-            logger.info("Image rejected: civic_confidence_pct=%%s, top_labels=%s", civic_confidence_pct, top_labels)
+            logger.info("Image rejected: civic_confidence_pct=%s, top_labels=%s", civic_confidence_pct, top_labels)
             raise HTTPException(status_code=422, detail={
                 "error": "No civic issue detected",
                 "top_labels": top_labels,
