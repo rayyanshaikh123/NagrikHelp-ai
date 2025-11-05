@@ -15,17 +15,11 @@ services:
       echo "=== Upgrading pip & build tools ==="
       python -m pip install --upgrade pip setuptools wheel
 
-      echo "=== Uninstalling old opencv-python (if present) ==="
-      pip uninstall -y opencv-python opencv-contrib-python || true
+      echo "=== Installing LIGHTWEIGHT dependencies (no YOLO/OpenCV) ==="
+      # Using requirements-light.txt for 512MB free tier
+      pip install --no-cache-dir --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-light.txt
 
-      echo "=== Installing dependencies from requirements.txt ==="
-      # Using requirements.txt with opencv-python-headless for headless environments
-      pip install --no-cache-dir --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
-
-      echo "=== Verifying opencv installation ==="
-      python -c "import cv2; print(f'OpenCV version: {cv2.__version__}')" || true
-
-      echo "=== Build finished ==="
+      echo "=== Build finished (YOLO disabled for memory constraints) ==="
       
     startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
     
@@ -34,7 +28,7 @@ services:
       - key: CONFIDENCE_THRESHOLD
         value: "0.45"
       - key: ENABLE_YOLO
-        value: "true"
+        value: "false"  # Disabled to reduce memory usage (512MB free tier)
       - key: ENABLE_CLIP
         value: "true"
       - key: TOP_K

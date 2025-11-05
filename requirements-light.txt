@@ -1,3 +1,21 @@
+# Lightweight deployment requirements for 512MB free tier
+# Only ResNet-50 + CLIP (no YOLO/OpenCV to save memory)
+
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+transformers==4.44.2
 Pillow==10.4.0
+datasets==2.21.0
+
+# NumPy - lighter version
+numpy>=1.24,<2.0
+
+# PyTorch - CPU version only
+torch==2.9.0
+torchvision==0.24.0
+
+# NO ultralytics - YOLO disabled to save ~500MB RAM
+# NO opencv - not needed without YOLO
+
+# Python dotenv for environment variables
+python-dotenv>=1.0.0
