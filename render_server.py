@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("render-server")
 
 # Config
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
 HF_MODEL = os.getenv("HF_MODEL", "microsoft/resnet-50")
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
@@ -31,6 +31,7 @@ CATEGORY_KEYWORDS: Dict[str, list[str]] = {
     "GARBAGE": ["garbage", "trash", "waste", "litter", "dump", "rubbish", "plastic", "bag", "dumpster", "bin"],
     "STREETLIGHT": ["street light", "lamp", "pole", "light", "streetlight", "lighting", "bulb", "lantern"],
     "WATER": ["water", "leak", "pipe", "flood", "puddle", "drain", "geyser", "fountain", "hose"],
+    "ELECTRICITY": ["wire", "electric", "electricity", "cable", "power line", "transformer", "pole"],
 }
 
 app = FastAPI()
