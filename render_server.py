@@ -53,7 +53,7 @@ def parse_image(data_uri: str) -> Image.Image:
     return Image.open(io.BytesIO(raw)).convert("RGB")
 
 
-def classify_image_hf(image: Image.Image) -> list:
+def classify_image_hf(image: Image.Image, retry_count: int = 0) -> list:
     """Call HF Inference API for image classification"""
     buf = io.BytesIO()
     image.save(buf, format="JPEG", quality=85)
@@ -64,26 +64,43 @@ def classify_image_hf(image: Image.Image) -> list:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
     try:
+        logger.info(f"Calling HF API: {HF_API_URL} (attempt {retry_count + 1})")
         resp = requests.post(HF_API_URL, data=buf.getvalue(), headers=headers, timeout=HF_TIMEOUT)
+        
+        logger.info(f"HF API response: {resp.status_code}")
         
         if resp.status_code == 200:
             result = resp.json()
             # Handle both list and dict responses
             if isinstance(result, list):
+                logger.info(f"HF API success: {len(result)} predictions")
                 return result
             elif isinstance(result, dict) and "error" in result:
-                logger.error(f"HF API returned error: {result['error']}")
+                logger.error(f"HF API returned error dict: {result}")
+                # Model might be loading, retry once
+                if retry_count < 1 and "loading" in str(result.get('error', '')).lower():
+                    logger.info("Model loading, waiting 10s before retry...")
+                    time.sleep(10)
+                    return classify_image_hf(image, retry_count + 1)
                 raise HTTPException(status_code=502, detail=result['error'])
+            logger.warning(f"Unexpected result format: {type(result)}")
             return result
         elif resp.status_code == 503:
-            raise HTTPException(status_code=503, detail="Model loading. Please retry in 10-20 seconds.")
+            # Model loading, retry once
+            if retry_count < 1:
+                logger.info("Model loading (503), waiting 15s before retry...")
+                time.sleep(15)
+                return classify_image_hf(image, retry_count + 1)
+            raise HTTPException(status_code=503, detail="Model loading. Please retry in 20-30 seconds.")
         elif resp.status_code == 429:
             raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
         elif resp.status_code in [404, 410]:
-            logger.error(f"HF API endpoint error ({resp.status_code}). Endpoint may have changed.")
-            raise HTTPException(status_code=502, detail="Inference API unavailable. Please contact support.")
+            error_text = resp.text[:500]
+            logger.error(f"HF API endpoint error ({resp.status_code}): {error_text}")
+            logger.error(f"Attempted URL: {HF_API_URL}")
+            raise HTTPException(status_code=502, detail=f"Inference API unavailable ({resp.status_code}). Endpoint may have changed.")
         else:
-            error_text = resp.text[:300]
+            error_text = resp.text[:500]
             logger.error(f"HF API error {resp.status_code}: {error_text}")
             raise HTTPException(status_code=502, detail=f"HF API error {resp.status_code}")
             
