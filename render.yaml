@@ -1,50 +1,39 @@
 services:
   - type: web
-    name: local-vision-server
+    name: nagrikhelp-ai-server
     env: python
     plan: free
-    # Use a multi-step build to prefer prebuilt wheels and install torch from
-    # the PyTorch wheel index (CPU). This avoids compiling tokenizers/tokenizers
-    # from source which is slow and often fails on newer Python/Rust setups.
+    # Optimized build for headless deployment with opencv-python-headless
     buildCommand: |
       set -euo pipefail
       echo "=== Build diagnostics ==="
       python --version || true
       pip --version || true
       uname -a || true
+      
       echo "=== Upgrading pip & build tools ==="
       python -m pip install --upgrade pip setuptools wheel
 
-      echo "=== Installing NumPy (ensure numpy<2 present before torch) ==="
-      pip install --prefer-binary "numpy<2" || true
-
-      echo "=== Installing PyTorch from PyTorch wheel index ==="
-      # Install torch (no fixed +cpu suffix) from PyTorch index so a
-      # compatible manylinux wheel is selected for the build environment.
-      pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu "torch" || true
-
-      echo "=== Installing remaining requirements (prefer binary wheels) ==="
-      pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r local_vision_requirements.txt
+      echo "=== Installing dependencies from requirements.txt ==="
+      # Using requirements.txt with opencv-python-headless for headless environments
+      pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
       echo "=== Build finished ==="
+      
     startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
+    
     envVars:
-      # Recommended public image classification model names you can use:
-      # - google/vit-base-patch16-224
-      # - google/vit-large-patch16-224
-      # - microsoft/resnet-50
-      # - facebook/convnext-base-224
-      # Default public model used for first deploy. You can override this in
-      # the Render dashboard (Environment > Environment Variables) to change
-      # model or to point to a private model (see HUGGINGFACE_HUB_TOKEN note).
-      - key: MODEL_NAME
-        value: "google/vit-base-patch16-224"
+      # AI Validation Configuration
+      - key: CONFIDENCE_THRESHOLD
+        value: "0.45"
+      - key: ENABLE_YOLO
+        value: "true"
+      - key: ENABLE_CLIP
+        value: "true"
       - key: TOP_K
         value: "5"
-      # If you need to access private or gated Hugging Face repositories,
-      # create a secret in Render named HUGGINGFACE_HUB_TOKEN and add it
-      # as an environment variable here (do NOT commit the token to git).
+      # Hugging Face token for private models (optional)
       - key: HUGGINGFACE_HUB_TOKEN
         value: ""
-      # Render provides $PORT at runtime; LOCAL_VISION_HOST is left as default in code
+        
     healthCheckPath: /
