@@ -21,8 +21,8 @@ logger = logging.getLogger("render-server")
 # Config
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.45"))
 HF_MODEL = os.getenv("HF_MODEL", "microsoft/resnet-50")
-# Use HF Inference Endpoints (current stable API)
-HF_API_URL = os.getenv("HF_API_URL", f"https://huggingface.co/api/models/{HF_MODEL}/inference")
+# Use HF Inference API (correct endpoint)
+HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL}")
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT_MS", "30000")) // 1000 or 30
 
@@ -56,10 +56,10 @@ def parse_image(data_uri: str) -> Image.Image:
 def classify_image_hf(image: Image.Image) -> list:
     """Call HF Inference API for image classification"""
     buf = io.BytesIO()
-    image.save(buf, format="PNG")
+    image.save(buf, format="JPEG", quality=85)
     buf.seek(0)
 
-    headers = {"Content-Type": "application/octet-stream"}
+    headers = {}
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
@@ -77,9 +77,11 @@ def classify_image_hf(image: Image.Image) -> list:
             return result
         elif resp.status_code == 503:
             raise HTTPException(status_code=503, detail="Model loading. Please retry in 10-20 seconds.")
-        elif resp.status_code == 410:
-            logger.error("HF API endpoint deprecated (410). Check HF_API_URL configuration.")
-            raise HTTPException(status_code=502, detail="Inference API endpoint deprecated. Please contact support.")
+        elif resp.status_code == 429:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
+        elif resp.status_code in [404, 410]:
+            logger.error(f"HF API endpoint error ({resp.status_code}). Endpoint may have changed.")
+            raise HTTPException(status_code=502, detail="Inference API unavailable. Please contact support.")
         else:
             error_text = resp.text[:300]
             logger.error(f"HF API error {resp.status_code}: {error_text}")
