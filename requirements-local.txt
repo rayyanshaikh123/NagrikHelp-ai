@@ -1,0 +1,24 @@
+# Local development requirements with full AI capabilities
+# YOLO + ResNet-50 + CLIP for maximum accuracy
+
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+transformers==4.44.2
+Pillow==10.4.0
+datasets==2.21.0
+
+# NumPy
+numpy>=1.24,<2.0
+
+# PyTorch - CPU version
+torch==2.4.0
+torchvision==0.19.0
+
+# YOLOv8 for object detection
+ultralytics>=8.0.0
+
+# OpenCV HEADLESS - no GUI dependencies
+opencv-python-headless>=4.8.0
+
+# Python dotenv for environment variables
+python-dotenv>=1.0.0
