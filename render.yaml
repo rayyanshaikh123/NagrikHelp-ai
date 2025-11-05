@@ -4,6 +4,7 @@ services:
     env: python
     plan: free
     # Optimized build for headless deployment with opencv-python-headless
+    # Build v2: Force clear cache and use new requirements.txt
     buildCommand: |
       set -euo pipefail
       echo "=== Build diagnostics ==="
@@ -14,9 +15,15 @@ services:
       echo "=== Upgrading pip & build tools ==="
       python -m pip install --upgrade pip setuptools wheel
 
+      echo "=== Uninstalling old opencv-python (if present) ==="
+      pip uninstall -y opencv-python opencv-contrib-python || true
+
       echo "=== Installing dependencies from requirements.txt ==="
       # Using requirements.txt with opencv-python-headless for headless environments
-      pip install --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+      pip install --no-cache-dir --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+
+      echo "=== Verifying opencv installation ==="
+      python -c "import cv2; print(f'OpenCV version: {cv2.__version__}')" || true
 
       echo "=== Build finished ==="
       
