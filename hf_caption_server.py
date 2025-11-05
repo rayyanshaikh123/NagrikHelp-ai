@@ -22,7 +22,7 @@ logger = logging.getLogger("hf-caption-server")
 
 # Config
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
-HF_MODEL = os.getenv("HF_MODEL", "nlpconnect/vit-gpt2-image-captioning")
+HF_MODEL = os.getenv("HF_MODEL", "auto").strip()
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT_MS", "30000")) // 1000 or 30
 HF_BILL_TO = os.getenv("HF_BILL_TO", "").strip()  # optional org billing
@@ -63,7 +63,11 @@ def hf_caption(image: Image.Image) -> str:
 
     try:
         # Use official client to route via HF Router automatically
-        res = hf_client.image_to_text(data, model=HF_MODEL)
+        model_arg = None if HF_MODEL.lower() in ("", "auto") else HF_MODEL
+        if model_arg is None:
+            res = hf_client.image_to_text(data)
+        else:
+            res = hf_client.image_to_text(data, model=model_arg)
         # Possible return shapes: str, list[dict], dict
         if isinstance(res, str):
             return res.strip()
