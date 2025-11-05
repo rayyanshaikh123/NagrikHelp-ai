@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("render-server")
 
 # Config
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.45"))
 HF_MODEL = os.getenv("HF_MODEL", "microsoft/resnet-50")
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
@@ -27,11 +27,11 @@ HF_TIMEOUT = int(os.getenv("HF_TIMEOUT_MS", "30000")) // 1000 or 30
 
 # Category keyword mapping for ResNet ImageNet labels
 CATEGORY_KEYWORDS: Dict[str, list[str]] = {
-    "POTHOLE": ["pothole", "hole", "crack", "asphalt", "pavement", "road"],
-    "GARBAGE": ["garbage", "trash", "waste", "litter", "dump", "rubbish", "plastic", "bag", "dumpster", "bin"],
-    "STREETLIGHT": ["street light", "lamp", "pole", "light", "streetlight", "lighting", "bulb", "lantern"],
-    "WATER": ["water", "leak", "pipe", "flood", "puddle", "drain", "geyser", "fountain", "hose"],
-    "ELECTRICITY": ["wire", "electric", "electricity", "cable", "power line", "transformer", "pole"],
+    "POTHOLE": ["pothole", "hole", "crack", "asphalt", "pavement", "road", "crater", "depression", "cavity", "damaged"],
+    "GARBAGE": ["garbage", "trash", "waste", "litter", "dump", "rubbish", "plastic", "bag", "dumpster", "bin", "debris"],
+    "STREETLIGHT": ["street light", "lamp", "pole", "light", "streetlight", "lighting", "bulb", "lantern", "lamppost"],
+    "WATER": ["water", "leak", "pipe", "flood", "puddle", "drain", "geyser", "fountain", "hose", "waterlog"],
+    "ELECTRICITY": ["wire", "electric", "electricity", "cable", "power line", "transformer", "pole", "exposed"],
 }
 
 app = FastAPI()
@@ -88,26 +88,41 @@ def map_labels_to_category(labels: list, description: str = "") -> Dict[str, Any
     scores: Dict[str, float] = {cat: 0.0 for cat in CATEGORY_KEYWORDS.keys()}
     scores["OTHER"] = 0.0
     
-    # Score based on label matching
-    for item in labels[:10]:  # Top 10 labels
+    # Score based on label matching with weighted importance
+    for idx, item in enumerate(labels[:10]):  # Top 10 labels
         label = item["label"].lower()
         score = item["score"]
+        
+        # Weight: top predictions matter more
+        weight = 1.0 if idx < 3 else 0.7
         
         matched = False
         for cat, keywords in CATEGORY_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in label:
-                    scores[cat] += score
+                    scores[cat] += score * weight * 1.2  # 1.2x boost for direct matches
                     matched = True
                     break
             if matched:
                 break
         
-        # Civic-related terms boost OTHER category
+        # Civic-related visual terms boost relevant categories
         if not matched:
-            civic_terms = ["outdoor", "street", "road", "building", "city", "urban", "sidewalk", "highway"]
-            if any(term in label for term in civic_terms):
-                scores["OTHER"] += score * 0.3
+            civic_visual = {
+                "outdoor": ["POTHOLE", "GARBAGE", "STREETLIGHT", "WATER"],
+                "street": ["POTHOLE", "STREETLIGHT"],
+                "road": ["POTHOLE"],
+                "pavement": ["POTHOLE"],
+                "ground": ["POTHOLE", "GARBAGE"],
+                "urban": ["POTHOLE", "GARBAGE", "STREETLIGHT"],
+                "container": ["GARBAGE"],
+                "bucket": ["GARBAGE", "WATER"],
+            }
+            for term, cats in civic_visual.items():
+                if term in label:
+                    for cat in cats:
+                        if cat in scores:
+                            scores[cat] += score * 0.4
     
     # Boost from description
     if description:
@@ -115,15 +130,18 @@ def map_labels_to_category(labels: list, description: str = "") -> Dict[str, Any
         for cat, keywords in CATEGORY_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in desc_lower:
-                    scores[cat] += 0.3
+                    scores[cat] += 0.4
     
     # Find best category
     best_cat = max(scores, key=scores.get)
     best_score = scores[best_cat]
     
-    # Normalize confidence
+    # Normalize confidence (cap at 0.95)
     confidence = min(best_score, 0.95)
-    is_issue = confidence >= CONFIDENCE_THRESHOLD
+    
+    # More lenient validation: if ANY civic category has decent score, consider it valid
+    any_civic_score = max(scores[cat] for cat in CATEGORY_KEYWORDS.keys())
+    is_issue = confidence >= CONFIDENCE_THRESHOLD or any_civic_score >= CONFIDENCE_THRESHOLD
     
     # Generate reasoning
     top_labels = [f"{l['label']} ({l['score']:.2f})" for l in labels[:3]]
