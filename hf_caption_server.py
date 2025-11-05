@@ -63,7 +63,7 @@ def hf_caption(image: Image.Image) -> str:
 
     try:
         # Use official client to route via HF Router automatically
-        res = hf_client.image_to_text(data, model=HF_MODEL, bill_to=(HF_BILL_TO or None))
+        res = hf_client.image_to_text(data, model=HF_MODEL)
         # Possible return shapes: str, list[dict], dict
         if isinstance(res, str):
             return res.strip()
