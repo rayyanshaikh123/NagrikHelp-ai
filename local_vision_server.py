@@ -220,6 +220,7 @@ def parse_image(data):
 
 
 @app.get("/")
+@app.head("/")
 def root():
     models_loaded = {
         "yolo": yolo_model is not None,
