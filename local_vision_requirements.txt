@@ -16,6 +16,12 @@ numpy>=1.25.0
 # Use NumPy 1.x series to remain compatible with many prebuilt PyTorch wheels
 numpy>=1.24,<2.0
 
+# YOLOv8 for object detection
+ultralytics>=8.0.0
+
+# OpenCV for image processing (required by YOLO)
+opencv-python>=4.8.0
+
 # NOTE: torch is installed during the Render build (see render.yaml) using
 # the official PyTorch wheel index to ensure a compatible binary wheel is
 # selected for the build environment. Keeping `torch` out of this file
