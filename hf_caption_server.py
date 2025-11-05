@@ -10,6 +10,8 @@ import logging
 from typing import Dict, Any
 
 import requests
+from huggingface_hub import InferenceClient
+from huggingface_hub.errors import InferenceTimeoutError
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -21,10 +23,12 @@ logger = logging.getLogger("hf-caption-server")
 # Config
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
 HF_MODEL = os.getenv("HF_MODEL", "nlpconnect/vit-gpt2-image-captioning")
-# HF Serverless Inference API endpoint
-HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL}")
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT_MS", "30000")) // 1000 or 30
+HF_BILL_TO = os.getenv("HF_BILL_TO", "").strip()  # optional org billing
+
+# Initialize a lightweight client that routes via the new HF Router under the hood
+hf_client = InferenceClient(api_key=HF_TOKEN or None, timeout=HF_TIMEOUT)
 
 # Category keywords
 CATEGORY_KEYWORDS: Dict[str, list[str]] = {
@@ -55,27 +59,23 @@ def hf_caption(image: Image.Image) -> str:
     # Encode to PNG bytes
     buf = io.BytesIO()
     image.save(buf, format="PNG")
-    buf.seek(0)
-
-    headers = {"Accept": "application/json"}
-    if HF_TOKEN:
-        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+    data = buf.getvalue()
 
     try:
-        resp = requests.post(HF_API_URL, data=buf.getvalue(), headers=headers, timeout=HF_TIMEOUT)
-        if resp.status_code == 200:
-            arr = resp.json()
-            if isinstance(arr, list) and arr and "generated_text" in arr[0]:
-                return str(arr[0]["generated_text"]).strip()
-            # Some models return dict
-            if isinstance(arr, dict) and "generated_text" in arr:
-                return str(arr["generated_text"]).strip()
-            raise HTTPException(status_code=502, detail=f"Unexpected HF response: {arr}")
-        elif resp.status_code in (503, 524):
-            raise HTTPException(status_code=503, detail="HF model loading/warming up. Try again.")
-        else:
-            raise HTTPException(status_code=502, detail=f"HF API error {resp.status_code}: {resp.text[:140]}")
-    except requests.Timeout:
+        # Use official client to route via HF Router automatically
+        res = hf_client.image_to_text(data, model=HF_MODEL, bill_to=(HF_BILL_TO or None))
+        # Possible return shapes: str, list[dict], dict
+        if isinstance(res, str):
+            return res.strip()
+        if isinstance(res, list) and res:
+            # Common shape: [{"generated_text": "..."}]
+            item = res[0]
+            if isinstance(item, dict) and "generated_text" in item:
+                return str(item["generated_text"]).strip()
+        if isinstance(res, dict) and "generated_text" in res:
+            return str(res["generated_text"]).strip()
+        raise HTTPException(status_code=502, detail=f"Unexpected HF response: {res}")
+    except InferenceTimeoutError:
         raise HTTPException(status_code=504, detail="HF API timeout")
     except Exception as e:
         logger.exception("HF API call failed: %s", e)
@@ -129,7 +129,6 @@ def root():
         "model": HF_MODEL,
         "confidence_threshold": CONFIDENCE_THRESHOLD,
         "uses_hf_api": True,
-        "hf_api_url": HF_API_URL,
     }
 
 
