@@ -1,0 +1,17 @@
+# NagrikHelp AI - BLIP Vision Model (HuggingFace)
+# Lightweight vision-language model for civic issue detection
+
+# FastAPI server
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# HuggingFace transformers (BLIP model)
+transformers==4.44.2
+torch==2.9.0
+torchvision==0.24.0
+
+# Image processing
+Pillow==10.4.0
+
+# Environment variables
+python-dotenv>=1.0.0

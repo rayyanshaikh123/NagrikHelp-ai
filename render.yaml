@@ -3,55 +3,26 @@ services:
     name: nagrikhelp-ai-server
     env: python
     plan: free
-    # Build v3: Lightweight mode for 512MB free tier (no YOLO/OpenCV)
+    # BLIP Vision: Vision-language model from HuggingFace (free, no API key needed!)
     buildCommand: |
       set -euo pipefail
-      echo "=== Build v3: Lightweight deployment ==="
-      cat .buildinfo || echo "No buildinfo"
-      python --version || true
-      pip --version || true
+      echo "=== Installing BLIP Vision Model (HuggingFace) ==="
+      python --version
+      pip --version
       
-      echo "=== Clearing ALL pip caches ==="
-      pip cache purge || true
-      rm -rf ~/.cache/pip || true
+      pip install --upgrade pip
+      pip install --no-cache-dir --prefer-binary -r requirements-gemini.txt
       
-      echo "=== Upgrading pip & build tools ==="
-      python -m pip install --upgrade pip setuptools wheel
-
-      echo "=== Removing ANY old opencv/yolo packages ==="
-      pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python ultralytics || true
-
-      echo "=== Installing LIGHTWEIGHT dependencies ==="
-      # NO YOLO, NO OPENCV - only ResNet + CLIP
-      pip install --no-cache-dir --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-light.txt
-
-      echo "=== Verifying installation ==="
-      python -c "import transformers; print('✓ transformers OK')"
-      python -c "import torch; print('✓ torch OK')"
-      python -c "try:
-    import cv2
-    print('✗ opencv found (should not exist)')
-except:
-    print('✓ opencv not installed (correct)')" || true
-
-      echo "=== Build v3 finished ==="
-
-      echo "=== Build finished (YOLO disabled for memory constraints) ==="
       
-    startCommand: uvicorn local_vision_server:app --host 0.0.0.0 --port $PORT
+      echo "=== Verifying BLIP installation ==="
+      python -c "from transformers import BlipProcessor; print('✓ BLIP ready')"
+      echo "=== Build complete ==="
+      
+    startCommand: uvicorn gemini_vision_server:app --host 0.0.0.0 --port $PORT
     
     envVars:
       # AI Validation Configuration
       - key: CONFIDENCE_THRESHOLD
-        value: "0.45"
-      - key: ENABLE_YOLO
-        value: "false"  # Disabled to reduce memory usage (512MB free tier)
-      - key: ENABLE_CLIP
-        value: "false"  # ALSO DISABLED - 512MB can only fit ResNet-50
-      - key: TOP_K
-        value: "5"
-      # Hugging Face token for private models (optional)
-      - key: HUGGINGFACE_HUB_TOKEN
-        value: ""
+        value: "0.5"
         
     healthCheckPath: /
