@@ -67,11 +67,17 @@ def load_models():
     if ENABLE_YOLO and yolo_model is None:
         try:
             logger.info("Loading YOLOv8 detection model...")
-            from ultralytics import YOLO
+            try:
+                from ultralytics import YOLO
+            except ImportError:
+                logger.warning("ultralytics not installed. YOLO detection disabled.")
+                return
             yolo_model = YOLO("yolov8n.pt")
             logger.info("✓ YOLOv8 base model loaded")
         except Exception as e:
             logger.warning(f"YOLOv8 loading failed: {e}. Detection disabled.")
+    elif not ENABLE_YOLO:
+        logger.debug("YOLO disabled in configuration (ENABLE_YOLO=false)")
             
     if resnet_model is None:
         try:
