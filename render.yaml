@@ -47,7 +47,7 @@ except:
       - key: ENABLE_YOLO
         value: "false"  # Disabled to reduce memory usage (512MB free tier)
       - key: ENABLE_CLIP
-        value: "true"
+        value: "false"  # ALSO DISABLED - 512MB can only fit ResNet-50
       - key: TOP_K
         value: "5"
       # Hugging Face token for private models (optional)
