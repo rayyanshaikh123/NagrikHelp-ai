@@ -21,32 +21,8 @@ logger = logging.getLogger("hf-caption-server")
 # Config
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
 HF_MODEL = os.getenv("HF_MODEL", "nlpconnect/vit-gpt2-image-captioning")
-# Build a safe HF Inference URL. Force new Router even if HF_API_URL is set to deprecated domain.
-HF_API_URL_ENV = os.getenv("HF_API_URL", "").strip()
-if HF_API_URL_ENV:
-    _url = HF_API_URL_ENV
-    try:
-        if "api-inference.huggingface.co" in _url:
-            import re as _re
-            _m = _re.search(r"/models/([^/?#]+)", _url)
-            _model = _m.group(1) if _m else HF_MODEL
-            HF_API_URL = f"https://router.huggingface.co/hf-inference/models/{_model}"
-        else:
-            if "hf-inference" not in _url:
-                # If it's a base URL or old '.../models/<model>' path, normalize to Router
-                if "/models/" in _url:
-                    import re as _re
-                    _m = _re.search(r"/models/([^/?#]+)$", _url.rstrip("/"))
-                    _model = _m.group(1) if _m else HF_MODEL
-                    HF_API_URL = f"https://router.huggingface.co/hf-inference/models/{_model}"
-                else:
-                    HF_API_URL = _url.rstrip("/") + f"/hf-inference/models/{HF_MODEL}"
-            else:
-                HF_API_URL = _url
-    except Exception:
-        HF_API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
-else:
-    HF_API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
+# HF Serverless Inference API endpoint
+HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL}")
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT_MS", "30000")) // 1000 or 30
 
