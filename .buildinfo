@@ -1,0 +1,4 @@
+# Build version for cache busting
+BUILD_VERSION=v3_lightweight_no_yolo
+BUILD_DATE=2025-11-05
+MEMORY_OPTIMIZED=true

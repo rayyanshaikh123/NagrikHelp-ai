@@ -3,21 +3,38 @@ services:
     name: nagrikhelp-ai-server
     env: python
     plan: free
-    # Optimized build for headless deployment with opencv-python-headless
-    # Build v2: Force clear cache and use new requirements.txt
+    # Build v3: Lightweight mode for 512MB free tier (no YOLO/OpenCV)
     buildCommand: |
       set -euo pipefail
-      echo "=== Build diagnostics ==="
+      echo "=== Build v3: Lightweight deployment ==="
+      cat .buildinfo || echo "No buildinfo"
       python --version || true
       pip --version || true
-      uname -a || true
+      
+      echo "=== Clearing ALL pip caches ==="
+      pip cache purge || true
+      rm -rf ~/.cache/pip || true
       
       echo "=== Upgrading pip & build tools ==="
       python -m pip install --upgrade pip setuptools wheel
 
-      echo "=== Installing LIGHTWEIGHT dependencies (no YOLO/OpenCV) ==="
-      # Using requirements-light.txt for 512MB free tier
+      echo "=== Removing ANY old opencv/yolo packages ==="
+      pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python ultralytics || true
+
+      echo "=== Installing LIGHTWEIGHT dependencies ==="
+      # NO YOLO, NO OPENCV - only ResNet + CLIP
       pip install --no-cache-dir --prefer-binary --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-light.txt
+
+      echo "=== Verifying installation ==="
+      python -c "import transformers; print('✓ transformers OK')"
+      python -c "import torch; print('✓ torch OK')"
+      python -c "try:
+    import cv2
+    print('✗ opencv found (should not exist)')
+except:
+    print('✓ opencv not installed (correct)')" || true
+
+      echo "=== Build v3 finished ==="
 
       echo "=== Build finished (YOLO disabled for memory constraints) ==="
       
