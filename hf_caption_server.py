@@ -21,7 +21,8 @@ logger = logging.getLogger("hf-caption-server")
 # Config
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
 HF_MODEL = os.getenv("HF_MODEL", "nlpconnect/vit-gpt2-image-captioning")
-HF_API_URL = os.getenv("HF_API_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL}")
+# Use new HF Inference Router endpoint (old api-inference.huggingface.co is deprecated)
+HF_API_URL = os.getenv("HF_API_URL", f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}")
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT_MS", "30000")) // 1000 or 30
 
