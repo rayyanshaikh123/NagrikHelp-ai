@@ -21,7 +21,8 @@ logger = logging.getLogger("render-server")
 # Config
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.45"))
 HF_MODEL = os.getenv("HF_MODEL", "microsoft/resnet-50")
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+# Use HF Inference Endpoints (current stable API)
+HF_API_URL = os.getenv("HF_API_URL", f"https://huggingface.co/api/models/{HF_MODEL}/inference")
 HF_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
 HF_TIMEOUT = int(os.getenv("HF_TIMEOUT_MS", "30000")) // 1000 or 30
 
@@ -58,7 +59,7 @@ def classify_image_hf(image: Image.Image) -> list:
     image.save(buf, format="PNG")
     buf.seek(0)
 
-    headers = {}
+    headers = {"Content-Type": "application/octet-stream"}
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
@@ -66,11 +67,21 @@ def classify_image_hf(image: Image.Image) -> list:
         resp = requests.post(HF_API_URL, data=buf.getvalue(), headers=headers, timeout=HF_TIMEOUT)
         
         if resp.status_code == 200:
-            return resp.json()  # Returns list of {"label": "...", "score": float}
+            result = resp.json()
+            # Handle both list and dict responses
+            if isinstance(result, list):
+                return result
+            elif isinstance(result, dict) and "error" in result:
+                logger.error(f"HF API returned error: {result['error']}")
+                raise HTTPException(status_code=502, detail=result['error'])
+            return result
         elif resp.status_code == 503:
             raise HTTPException(status_code=503, detail="Model loading. Please retry in 10-20 seconds.")
+        elif resp.status_code == 410:
+            logger.error("HF API endpoint deprecated (410). Check HF_API_URL configuration.")
+            raise HTTPException(status_code=502, detail="Inference API endpoint deprecated. Please contact support.")
         else:
-            error_text = resp.text[:200]
+            error_text = resp.text[:300]
             logger.error(f"HF API error {resp.status_code}: {error_text}")
             raise HTTPException(status_code=502, detail=f"HF API error {resp.status_code}")
             
