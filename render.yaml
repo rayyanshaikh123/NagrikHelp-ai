@@ -2,7 +2,7 @@ services:
   - type: web
     name: nagrikhelp-ai-server
     env: python
-    plan: free
+  plan: standard
     # BLIP Vision: Vision-language model from HuggingFace (free, no API key needed!)
     buildCommand: |
       set -euo pipefail
