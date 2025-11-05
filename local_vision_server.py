@@ -96,7 +96,13 @@ def load_models():
 
 
 def detect_with_yolo(image):
-    if not ENABLE_YOLO or yolo_model is None:
+    """Detect objects using YOLO (disabled in lightweight mode)"""
+    if not ENABLE_YOLO:
+        logger.debug("YOLO disabled by config")
+        return False, None, 0.0
+    
+    if yolo_model is None:
+        logger.warning("YOLO model not loaded")
         return False, None, 0.0
     
     try:
@@ -237,6 +243,7 @@ def root():
 
 @app.post("/validate")
 async def validate_issue(request: Request):
+    """Main validation endpoint combining multiple AI models"""
     import time
     start_time = time.time()
     
@@ -246,15 +253,31 @@ async def validate_issue(request: Request):
         if not body.get("image"):
             raise HTTPException(status_code=400, detail="'image' field required")
         
-        load_models()
+        # Load models (lazy loading on first request)
+        try:
+            load_models()
+        except Exception as e:
+            logger.error(f"Model loading failed: {e}")
+            raise HTTPException(status_code=503, detail=f"AI models unavailable: {str(e)}")
         
-        image = parse_image(body["image"])
+        # Parse image
+        try:
+            image = parse_image(body["image"])
+        except Exception as e:
+            logger.error(f"Image parsing failed: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid image format: {str(e)}")
+        
         description = body.get("description", "")
         
-        has_detection, bbox, yolo_conf = detect_with_yolo(image)
-        resnet_labels = classify_with_resnet(image)
-        resnet_category, resnet_conf = map_labels_to_civic_category(resnet_labels)
-        clip_scores = classify_with_clip(image, description)
+        # Run AI detection/classification
+        try:
+            has_detection, bbox, yolo_conf = detect_with_yolo(image)
+            resnet_labels = classify_with_resnet(image)
+            resnet_category, resnet_conf = map_labels_to_civic_category(resnet_labels)
+            clip_scores = classify_with_clip(image, description)
+        except Exception as e:
+            logger.error(f"AI model inference failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Model inference error: {str(e)}")
         
         final_scores = {cat: 0.0 for cat in CIVIC_CATEGORIES.keys()}
         
@@ -301,11 +324,16 @@ async def validate_issue(request: Request):
                 else f"Low confidence ({final_confidence*100:.1f}%). Unable to detect clear civic issue."
             ),
             "latencyMs": elapsed_ms,
-            "rawLabels": resnet_labels[:5],
+            "rawLabels": resnet_labels[:5] if resnet_labels else [],
             "debug": {
                 "yolo": {"detected": has_detection, "conf": yolo_conf},
                 "resnet": {"category": resnet_category, "conf": resnet_conf},
-                "clip": dict(list(clip_scores.items())[:5]) if clip_scores else {}
+                "clip": dict(list(clip_scores.items())[:5]) if clip_scores else {},
+                "models_loaded": {
+                    "yolo": yolo_model is not None,
+                    "resnet": resnet_model is not None,
+                    "clip": clip_model is not None
+                }
             }
         }
         
@@ -314,8 +342,8 @@ async def validate_issue(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Validation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Unexpected validation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
 @app.post("/classify")
