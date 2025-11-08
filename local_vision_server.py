@@ -18,7 +18,11 @@ from PIL import Image
 import numpy as np
 
 # Configuration
+<<<<<<< Updated upstream
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.45"))
+=======
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.48"))
+>>>>>>> Stashed changes
 ENABLE_YOLO = os.getenv("ENABLE_YOLO", "true").lower() == "true"
 ENABLE_CLIP = os.getenv("ENABLE_CLIP", "true").lower() == "true"
 TOP_K = int(os.getenv("TOP_K", "5"))
